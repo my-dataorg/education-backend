@@ -7,6 +7,12 @@ Education product API — institutes, members, invitations, branches, sections, 
 ## Run locally
 
 ```bash
+./scripts/run.sh
+```
+
+Or manually:
+
+```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
