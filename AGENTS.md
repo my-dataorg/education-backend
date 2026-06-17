@@ -6,6 +6,7 @@ Education product API: institutes, members, invitations, branches, sections, ass
 
 | Agent | When to use |
 |-------|-------------|
+| **backend-developer** | **Primary** — all API implementation, services, auth, migrations |
 | **edu-super** | Domain model, permissions, API design |
 | **edu-staff** | Staff roles, invitations, branches, member APIs |
 | **edu-student** | Admissions, sections, submissions |

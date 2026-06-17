@@ -37,6 +37,11 @@ class JoinInstitute(BaseModel):
 class MemberOut(BaseModel):
     userId: str
     role: str
+    firstName: str = ""
+    lastName: str = ""
+    displayName: str = ""
+    email: str = ""
+    username: str = ""
 
 
 class MemberAdd(BaseModel):
@@ -58,6 +63,45 @@ class MemberProfileOut(BaseModel):
 class BranchTeacherBrief(BaseModel):
     userId: str
     role: str
+    firstName: str = ""
+    lastName: str = ""
+    displayName: str = ""
+    email: str = ""
+    username: str = ""
+
+
+class BranchStudentBrief(BaseModel):
+    userId: str
+    role: str
+    firstName: str = ""
+    lastName: str = ""
+    displayName: str = ""
+    email: str = ""
+    username: str = ""
+
+
+class UpcomingEventOut(BaseModel):
+    type: str
+    title: str
+    dueDate: str
+    sectionName: str
+    branchName: str | None = None
+
+
+class AssignmentResultOut(BaseModel):
+    assignmentId: str
+    title: str
+    sectionName: str
+    dueDate: str | None = None
+    submittedCount: int
+    enrolledStudents: int
+    completionPercent: int
+
+
+class BranchInsightsOut(BaseModel):
+    openAssignments: int
+    averageCompletionPercent: int | None = None
+    recentResults: list[AssignmentResultOut]
 
 
 class BranchSummaryOut(BaseModel):
@@ -69,20 +113,15 @@ class BranchSummaryOut(BaseModel):
     teacherCount: int
     studentCount: int
     teachers: list[BranchTeacherBrief]
-
-
-class UpcomingEventOut(BaseModel):
-    type: str
-    title: str
-    dueDate: str
-    sectionName: str
-    branchName: str | None = None
+    students: list[BranchStudentBrief]
+    insights: BranchInsightsOut
 
 
 class InstituteSummaryOut(BaseModel):
     branchCount: int
     branches: list[BranchSummaryOut]
     upcomingEvents: list[UpcomingEventOut]
+    pendingInvitations: int = 0
 
 
 class InvitationCreate(BaseModel):
@@ -103,6 +142,10 @@ class InvitationOut(BaseModel):
     instituteName: str | None = None
     inviteeUserId: str | None = None
     inviteeEmail: str = ""
+    inviteeFirstName: str = ""
+    inviteeLastName: str = ""
+    inviteeDisplayName: str = ""
+    inviteeUsername: str = ""
     role: str
     status: str
     invitedBy: str
@@ -112,6 +155,37 @@ class InvitationOut(BaseModel):
 class InvitationRespondOut(BaseModel):
     instituteId: str
     role: str
+
+
+class JoinRequestCreate(BaseModel):
+    requestedRole: str = Field(pattern="^(teacher|lecturer|professor|student)$")
+    message: str = ""
+
+
+class JoinRequestOut(BaseModel):
+    id: str
+    instituteId: str
+    instituteName: str | None = None
+    userId: str
+    userEmail: str | None = None
+    firstName: str = ""
+    lastName: str = ""
+    displayName: str = ""
+    username: str = ""
+    requestedRole: str
+    message: str
+    status: str
+    createdAt: datetime
+
+
+class JoinRequestRespondOut(BaseModel):
+    instituteId: str
+    role: str
+
+
+class InstituteLookupOut(BaseModel):
+    id: str
+    name: str
 
 
 class UserSearchOut(BaseModel):
@@ -160,6 +234,42 @@ class SectionOut(BaseModel):
 
 class AssignMember(BaseModel):
     userId: str
+
+
+class SectionMemberAssign(BaseModel):
+    userId: str
+    memberType: str = Field(pattern="^(teacher|student)$")
+
+
+class SectionEnrollmentOut(BaseModel):
+    sectionId: str
+    sectionName: str
+    className: str
+    branchName: str | None = None
+    memberType: str | None = None
+
+
+class SectionOverviewAssignment(BaseModel):
+    id: str
+    title: str
+    description: str
+    dueDate: str | None
+    submittedCount: int
+    enrolledStudents: int
+    completionPercent: int
+
+
+class SectionOverviewOut(BaseModel):
+    sectionId: str
+    sectionName: str
+    className: str
+    teacherCount: int
+    studentCount: int
+    notesCount: int
+    averageCompletionPercent: int | None
+    assignments: list[SectionOverviewAssignment]
+    students: list[dict] | None = None
+    teachers: list[dict] | None = None
 
 
 class NoteCreate(BaseModel):

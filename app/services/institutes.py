@@ -15,6 +15,7 @@ from app.models import (
     Submission,
 )
 from app.roles import MANAGE_ROLES, STAFF_ROLES, STUDENT_ROLE, VIEW_DIRECTORY_ROLES
+from app.services.user_identity import enrich_rows
 
 
 def get_membership(db: Session, institute_id: str, user_id: str) -> InstituteMember | None:
@@ -163,6 +164,88 @@ def get_member_profile(db: Session, institute_id: str, member_user_id: str) -> d
     }
 
 
+def _section_ids_for_branch(
+    db: Session,
+    institute_id: str,
+    branch_id: str,
+    primary_id: str | None,
+) -> list[str]:
+    sections = list(
+        db.scalars(select(Section).where(Section.institute_id == institute_id)).all()
+    )
+    ids: list[str] = []
+    for section in sections:
+        if section.branch_id == branch_id:
+            ids.append(section.id)
+        elif section.branch_id is None and primary_id and branch_id == primary_id:
+            ids.append(section.id)
+    return ids
+
+
+def _branch_insights(db: Session, section_ids: list[str]) -> dict:
+    if not section_ids:
+        return {
+            "openAssignments": 0,
+            "averageCompletionPercent": None,
+            "recentResults": [],
+        }
+
+    today = date.today()
+    assignments = list(
+        db.scalars(
+            select(Assignment)
+            .where(Assignment.section_id.in_(section_ids))
+            .order_by(Assignment.due_date.desc().nulls_last(), Assignment.id.desc())
+        ).all()
+    )
+    open_assignments = sum(
+        1 for a in assignments if a.due_date is None or a.due_date >= today
+    )
+
+    recent_results: list[dict] = []
+    completion_rates: list[int] = []
+
+    for assignment in assignments[:8]:
+        section = db.get(Section, assignment.section_id)
+        if not section:
+            continue
+        enrolled = db.scalar(
+            select(func.count())
+            .select_from(SectionMember)
+            .where(
+                SectionMember.section_id == section.id,
+                SectionMember.member_type == "student",
+            )
+        ) or 0
+        submitted = db.scalar(
+            select(func.count())
+            .select_from(Submission)
+            .where(Submission.assignment_id == assignment.id)
+        ) or 0
+        completion = round(submitted / enrolled * 100) if enrolled else 0
+        if enrolled:
+            completion_rates.append(completion)
+        recent_results.append(
+            {
+                "assignmentId": assignment.id,
+                "title": assignment.title,
+                "sectionName": section.name,
+                "dueDate": assignment.due_date.isoformat() if assignment.due_date else None,
+                "submittedCount": submitted,
+                "enrolledStudents": enrolled,
+                "completionPercent": completion,
+            }
+        )
+
+    average = round(sum(completion_rates) / len(completion_rates)) if completion_rates else None
+
+    return {
+        "openAssignments": open_assignments,
+        "averageCompletionPercent": average,
+        "recentResults": recent_results[:5],
+    }
+
+
 def get_institute_summary(db: Session, institute_id: str) -> dict:
     branches = list(
         db.scalars(select(Branch).where(Branch.institute_id == institute_id).order_by(Branch.name))
@@ -188,6 +271,11 @@ def get_institute_summary(db: Session, institute_id: str) -> dict:
             m = get_membership(db, institute_id, uid)
             teachers.append({"userId": uid, "role": m.role if m else "teacher"})
 
+        students = []
+        for uid in sorted(student_ids):
+            m = get_membership(db, institute_id, uid)
+            students.append({"userId": uid, "role": m.role if m else "student"})
+
         branch_summaries.append(
             {
                 "id": branch.id,
@@ -198,6 +286,11 @@ def get_institute_summary(db: Session, institute_id: str) -> dict:
                 "teacherCount": len(teacher_ids),
                 "studentCount": len(student_ids),
                 "teachers": teachers,
+                "students": students,
+                "insights": _branch_insights(
+                    db,
+                    _section_ids_for_branch(db, institute_id, branch.id, primary.id if primary else None),
+                ),
             }
         )
 
@@ -206,7 +299,7 @@ def get_institute_summary(db: Session, institute_id: str) -> dict:
         primary_summary = next((b for b in branch_summaries if b["id"] == primary.id), None)
         if primary_summary:
             extra_teacher_ids = {t["userId"] for t in primary_summary["teachers"]}
-            extra_student_count = primary_summary["studentCount"]
+            extra_student_ids = {s["userId"] for s in primary_summary["students"]}
             unassigned = list(
                 db.scalars(
                     select(Section).where(
@@ -226,10 +319,14 @@ def get_institute_summary(db: Session, institute_id: str) -> dict:
                                 {"userId": sm.user_id, "role": m.role if m else "teacher"}
                             )
                             extra_teacher_ids.add(sm.user_id)
-                    else:
-                        extra_student_count += 1
+                    elif sm.user_id not in extra_student_ids:
+                        m = get_membership(db, institute_id, sm.user_id)
+                        primary_summary["students"].append(
+                            {"userId": sm.user_id, "role": m.role if m else "student"}
+                        )
+                        extra_student_ids.add(sm.user_id)
             primary_summary["teacherCount"] = len(primary_summary["teachers"])
-            primary_summary["studentCount"] = extra_student_count
+            primary_summary["studentCount"] = len(primary_summary["students"])
 
     today = date.today()
     upcoming = []
@@ -256,10 +353,24 @@ def get_institute_summary(db: Session, institute_id: str) -> dict:
             }
         )
 
+    pending_invitations = db.scalar(
+        select(func.count())
+        .select_from(InstituteInvitation)
+        .where(
+            InstituteInvitation.institute_id == institute_id,
+            InstituteInvitation.status == "pending",
+        )
+    ) or 0
+
+    for branch in branch_summaries:
+        branch["teachers"] = enrich_rows(branch["teachers"])
+        branch["students"] = enrich_rows(branch["students"])
+
     return {
         "branchCount": len(branches),
         "branches": branch_summaries,
         "upcomingEvents": upcoming,
+        "pendingInvitations": pending_invitations,
     }
 
 

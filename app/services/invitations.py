@@ -1,10 +1,16 @@
 from datetime import datetime, timezone
+import logging
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models import Institute, InstituteInvitation, InstituteMember
-from app.roles import ALL_ASSIGNABLE_ROLES
+from app.platform_client import notify_user
+from app.roles import ALL_ASSIGNABLE_ROLES, ROLE_LABELS
+from app.services.keycloak_users import find_user_id_by_email
+from app.services.membership_hooks import on_member_joined
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize_email(email: str) -> str:
@@ -70,7 +76,53 @@ def create_invitation(
     db.add(inv)
     db.commit()
     db.refresh(inv)
+    _notify_invitation_created(db, inv)
     return inv
+
+
+def _notify_invitation_created(db: Session, inv: InstituteInvitation) -> None:
+    institute = db.get(Institute, inv.institute_id)
+    institute_name = institute.name if institute else "an institute"
+    role_label = ROLE_LABELS.get(inv.role, inv.role)
+
+    user_id = inv.invitee_user_id
+    if not user_id and inv.invitee_email:
+        user_id = find_user_id_by_email(inv.invitee_email)
+    if not user_id:
+        return
+
+    notify_user(
+        user_id,
+        type="education.invitation",
+        title=f"Invitation to {institute_name}",
+        body=f"You were invited as {role_label}. Accept or decline from your inbox.",
+        link="http://localhost:3000/invitations",
+    )
+
+
+def _on_invitation_accepted(
+    db: Session,
+    inv: InstituteInvitation,
+    member: InstituteMember,
+    user_id: str,
+    email: str,
+) -> None:
+    """Auto-subscribe, welcome user, notify inviter. Platform failures are logged."""
+    institute = db.get(Institute, inv.institute_id)
+    institute_name = institute.name if institute else "an institute"
+    role_label = ROLE_LABELS.get(member.role, member.role)
+    dashboard_link = f"http://localhost:3010/institutes/{inv.institute_id}"
+
+    on_member_joined(db, inv.institute_id, user_id, member.role, email=email)
+
+    if inv.invited_by:
+        notify_user(
+            inv.invited_by,
+            type="education.invitation.accepted.inviter",
+            title=f"Invitation accepted — {institute_name}",
+            body=f"{email or 'A user'} joined as {role_label}.",
+            link=dashboard_link,
+        )
 
 
 def _invitation_matches_user(inv: InstituteInvitation, user_id: str, email: str) -> bool:
@@ -127,10 +179,9 @@ def accept_invitation(
         )
     )
     if existing:
-        inv.status = "accepted"
-        inv.invitee_user_id = user_id
-        inv.responded_at = datetime.now(timezone.utc)
+        db.delete(inv)
         db.commit()
+        db.refresh(existing)
         return existing
 
     member = InstituteMember(
@@ -144,6 +195,7 @@ def accept_invitation(
     inv.responded_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(member)
+    _on_invitation_accepted(db, inv, member, user_id, email)
     return member
 
 

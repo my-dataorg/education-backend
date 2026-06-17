@@ -7,8 +7,8 @@ Base URL: `http://localhost:8010` · Prefix: `/v1`
 | Tier | Dependency | Routes |
 |------|------------|--------|
 | Public health | None | `/health` |
-| Logged-in user | JWT only | Invitation list/accept/reject |
-| Education subscriber | JWT + `education` subscription | Most institute routes |
+| Logged-in user | JWT only | Invitations, join requests (submit/list own), institute lookup |
+| Education subscriber | JWT + `education` subscription | Most institute admin routes |
 
 Header: `Authorization: Bearer <JWT>` · Optional: `X-User-Email` for invitation matching
 
@@ -36,6 +36,27 @@ Header: `Authorization: Bearer <JWT>` · Optional: `X-User-Email` for invitation
 | GET | `/v1/users/me/invitations` | Pending for current user |
 | POST | `/v1/invitations/{id}/accept` | Accept |
 | POST | `/v1/invitations/{id}/reject` | Decline |
+
+## Join requests
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/v1/institutes/lookup?joinCode=` | JWT | Resolve institute by join code |
+| POST | `/v1/institutes/{id}/join-requests` | JWT | Submit request `{ requestedRole, message }` |
+| GET | `/v1/institutes/{id}/join-requests?status=pending` | Subscriber + manage | Admin list pending |
+| GET | `/v1/users/me/join-requests` | JWT | User's pending requests |
+| POST | `/v1/join-requests/{id}/accept` | Subscriber + manage | Accept → member + auto-subscribe |
+| POST | `/v1/join-requests/{id}/reject` | Subscriber + manage | Reject + notify user |
+
+## Section enrollment
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/v1/institutes/{id}/members/{userId}/sections` | Admin: member enrollments |
+| GET | `/v1/users/me/institutes/{id}/sections` | Current user's enrolled sections |
+| POST | `/v1/sections/{id}/members` | Assign `{ userId, memberType }` |
+| DELETE | `/v1/sections/{id}/members/{userId}` | Remove enrollment |
+| GET | `/v1/sections/{id}/overview` | Students, assignments, progress |
 
 ## Branches & sections
 

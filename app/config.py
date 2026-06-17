@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     keycloak_admin_user: str = "admin"
     keycloak_admin_password: str = "admin"
     subscriptions_api_url: str = "http://localhost:8002"
+    platform_internal_token: str = "mydata-internal-dev-token"
 
     @property
     def jwks_url(self) -> str:

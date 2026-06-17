@@ -1,4 +1,5 @@
 MANAGE_ROLES = frozenset({"owner", "admin"})
+JOIN_REQUEST_ROLES = frozenset({"teacher", "lecturer", "professor", "student"})
 STAFF_ROLES = frozenset({"owner", "admin", "principal", "teacher", "lecturer", "professor"})
 TEACHING_STAFF_ROLES = frozenset({"principal", "teacher", "lecturer", "professor"})
 TEACHER_ROLES = frozenset({"owner", "admin", "principal", "teacher", "lecturer", "professor"})

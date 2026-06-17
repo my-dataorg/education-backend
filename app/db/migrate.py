@@ -81,6 +81,28 @@ def migrate_invitations(engine: Engine) -> None:
         )
 
 
+def migrate_join_requests(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS institute_join_requests (
+                    id VARCHAR(36) PRIMARY KEY,
+                    institute_id VARCHAR(36) NOT NULL REFERENCES institutes(id),
+                    user_id VARCHAR(64) NOT NULL,
+                    requested_role VARCHAR(32) NOT NULL,
+                    message TEXT DEFAULT '',
+                    status VARCHAR(16) DEFAULT 'pending',
+                    reviewed_by VARCHAR(64),
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    responded_at TIMESTAMPTZ,
+                    UNIQUE (institute_id, user_id, status)
+                )
+                """
+            )
+        )
+
+
 def seed_default_branches(db: Session) -> None:
     """Give existing institutes a primary branch if they have none."""
     institute_ids = db.scalars(select(Institute.id)).all()
