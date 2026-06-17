@@ -1,0 +1,45 @@
+---
+description: Team-wide engineering standards for MyData squads
+alwaysApply: true
+---
+
+# Team Rules
+
+## Ownership
+
+- Platform squad: `platform-*` repos
+- Education squad: `education-*` repos
+- Social squad: `social-*` repos
+- Contract changes need platform squad review
+
+## Code standards
+
+- **Frontend repos:** TypeScript strict mode (Next.js)
+- **Backend repos:** Python 3.12+, FastAPI, SQLAlchemy, psycopg2, Alembic, ruff
+- Follow `simple-code.mdc` — clarity over cleverness
+- No secrets in git; use env vars and vault in prod
+- All public APIs documented in OpenAPI (`platform-contracts`) before merge
+
+## Testing
+
+- Unit tests for business logic
+- Integration tests for API routes
+- E2E for critical user paths (login, subscribe, core product flow)
+- testing-agent must pass before review-agent
+
+## Reviews
+
+- code-review agent is required on every feature PR
+- Architect review required for `platform-contracts` major bumps
+- Two human approvals for production deploys (team policy)
+
+## Communication
+
+- Boundary changes → ADR in `docs/adr/`
+- Breaking API changes → `#platform-contracts` channel + semver major
+
+## Simplicity pledge
+
+> Make the code so simple a human can read it like plain English. Do not write so many lines of code.
+
+This applies to all squads. Refactor agent may be invoked when PRs exceed 400 lines.

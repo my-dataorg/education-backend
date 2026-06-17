@@ -1,0 +1,57 @@
+---
+description: FastAPI, SQLAlchemy ORM, and psycopg2 backend conventions
+globs: "**/app/**/*.py,**/tests/**/*.py,alembic/**"
+alwaysApply: false
+---
+
+# Python Backend (FastAPI + SQLAlchemy + psycopg2)
+
+## Stack
+
+- FastAPI + Pydantic v2
+- SQLAlchemy 2.x ORM
+- psycopg2 driver (`postgresql+psycopg2://`)
+- Alembic migrations
+- pytest for tests
+
+## Layer rules
+
+| Layer | Responsibility |
+|-------|----------------|
+| `routers/` | HTTP only — parse request, call service, return Pydantic schema |
+| `services/` | Business logic, DB session usage |
+| `models/` | SQLAlchemy ORM models |
+| `schemas/` | Pydantic request/response (separate from models) |
+| `db/session.py` | Engine, SessionLocal, `get_db` dependency |
+
+## ORM rules
+
+- Use SQLAlchemy 2.0 style (`Mapped`, `select()`, `db.get()`)
+- Keep queries in services — not in routers
+- Never return ORM models from routers; map to Pydantic schemas
+- Migrations via Alembic only — no manual prod schema changes
+
+```python
+# GOOD
+def get_user(db: Session, user_id: str) -> User | None:
+    return db.get(User, user_id)
+
+# BAD — exposing ORM in router
+@router.get("/users/{id}")
+def show(id: str, db: Session = Depends(get_db)):
+    return db.get(User, id)  # returns ORM object directly
+```
+
+## Keep it simple
+
+- Plain functions in services over deep class hierarchies
+- One router file per domain
+- Early returns; avoid nested session logic
+
+## Auth dependency
+
+Every product route (except `/health`):
+
+1. `get_current_user` — JWT validation
+2. `require_subscription("education")` — entitlement check
+3. Tenant scope in service layer

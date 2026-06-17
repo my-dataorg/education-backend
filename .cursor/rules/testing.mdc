@@ -1,0 +1,39 @@
+---
+description: Testing standards and expectations
+globs: "**/*.test.ts,**/*.spec.ts,**/e2e/**,**/tests/**"
+alwaysApply: false
+---
+
+# Testing Rules
+
+## Required coverage
+
+| Repo type | Layer | Tool | Minimum |
+|-----------|-------|------|---------|
+| Frontend | Unit | Vitest | Components, hooks, utils |
+| Frontend | E2E | Playwright | Login, subscribe, product happy path |
+| Backend | Unit | pytest | Service/business logic |
+| Backend | API | pytest + httpx `TestClient` | All public FastAPI routes |
+
+## Test style
+
+- Arrange / Act / Assert — keep tests short
+- One assertion focus per test when possible
+- Name tests as behavior: `rejects unsubscribed user from creating institute`
+
+## After feature work
+
+1. Run `npm test` in affected repo
+2. Invoke testing-agent to find gaps
+3. Do not merge without passing CI
+
+## What not to test
+
+- Framework internals
+- Trivial getters with no logic
+- SQLAlchemy engine internals (mock `Session` in unit tests; use test DB for integration)
+
+## Platform-specific
+
+- Mock `platform-subscriptions` in product tests
+- Contract tests: validate responses against OpenAPI schema

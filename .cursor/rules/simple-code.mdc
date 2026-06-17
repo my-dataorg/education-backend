@@ -1,0 +1,56 @@
+---
+description: Write simple, human-readable code — fewer lines, clear intent
+alwaysApply: true
+---
+
+# Simple Code
+
+Write code the way a clear human would explain it. Prefer short, obvious solutions.
+
+## Rules
+
+1. **Fewer lines** — If it can be said in 5 lines, do not write 50.
+2. **Flat over nested** — Early returns beat deep if/else pyramids.
+3. **One job per function** — Small functions with plain names (`getGuardians`, not `fetchAndProcessGuardianData`).
+4. **No premature abstraction** — No helpers for one-time logic; no generic frameworks inside features.
+5. **Readable names** — `instituteId` not `iid`; `createAssignment` not `handleAssignmentCreationFlow`.
+6. **Delete duplication** — Extract only when the same pattern appears 3+ times.
+7. **Comments for why, not what** — Code should read plainly; comment only non-obvious business rules.
+
+## Examples
+
+```typescript
+// BAD — too many layers
+const result = await pipe(userId, fetchUser, validateUser, mapToDto, wrapResponse);
+
+// GOOD — direct
+const user = await users.findById(userId);
+if (!user) throw new NotFoundError();
+return { id: user.id, name: user.name };
+```
+
+```typescript
+// BAD — over-engineered
+class AssignmentSubmissionStrategyFactory { ... }
+
+// GOOD
+async function submitAssignment(assignmentId: string, body: SubmitDto) {
+  const assignment = await assignments.findOrThrow(assignmentId);
+  await assertStudentEnrolled(assignment.sectionId, body.studentId);
+  return submissions.create({ assignmentId, ...body });
+}
+```
+
+```python
+# BAD — repository factory for one lookup
+class UserRepositoryFactory: ...
+
+# GOOD
+def get_user(db: Session, user_id: str) -> User | None:
+    return db.get(User, user_id)
+```
+
+## PR size
+
+- Target **< 200 lines** changed per feature task.
+- If larger, split the task with the planner agent.

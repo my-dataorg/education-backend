@@ -1,0 +1,48 @@
+---
+description: Mandatory development workflow — plan, implement, test, review, document
+alwaysApply: true
+---
+
+# Development Workflow
+
+## Feature sequence (do not skip)
+
+1. **Plan** — planner agent: task spec with scope, files, acceptance criteria
+2. **Implement** — one small task; follow `simple-code.mdc`
+3. **Test** — testing-agent: run tests, add missing coverage
+4. **Review** — code-review agent on the diff
+5. **Document** — documentation agent if APIs, boundaries, or ADRs changed
+
+## Task spec template
+
+Create `docs/tasks/YYYYMMDD-short-name.md`:
+
+```markdown
+## Goal
+## Repo(s)
+## Acceptance criteria
+## Files to touch
+## Out of scope
+## Contract changes (if any)
+```
+
+## When to invoke agents
+
+| Situation | Agent |
+|-----------|-------|
+| New feature | planner |
+| Cross-repo or boundary change | architect |
+| Code written | testing-agent |
+| Tests green | code-review |
+| Architecture/API change | documentation |
+| Code too complex | refactor |
+
+## Commits and PRs
+
+- One task per PR
+- PR title: `[repo] short description`
+- Link task spec in PR body
+
+## No coding without plan
+
+Features > 1 file or touching API contracts require a task spec first.

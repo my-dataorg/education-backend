@@ -1,0 +1,48 @@
+---
+description: API and service boundary conventions
+globs: "**/src/**/*.{ts,tsx},**/app/**/*.py,platform-contracts/**"
+alwaysApply: false
+---
+
+# API Boundaries
+
+## Route prefixes
+
+- Platform: `/api/auth/v1`, `/api/subscriptions/v1`
+- Education: `/api/education/v1`
+- Social: `/api/social/v1`
+
+## Every product route must
+
+1. Validate JWT (FastAPI dependency)
+2. Check product subscription (except health)
+3. Scope data to tenant (institute_id for Education)
+
+## FastAPI convention
+
+- Routers in `app/routers/` — thin; delegate to `app/services/`
+- ORM models in `app/models/` (SQLAlchemy); queries in services
+- Pydantic schemas in `app/schemas/` — return schemas, not ORM objects
+
+## Errors
+
+Use RFC 7807 Problem Details:
+
+```json
+{
+  "type": "https://mydata.platform/errors/not-subscribed",
+  "title": "Product Not Subscribed",
+  "status": 403
+}
+```
+
+## Cross-service calls
+
+- Browser → gateway only
+- Backend → other product's **public** contract endpoints only
+- Pass `X-Request-Id` on all outbound calls
+
+## Versioning
+
+- Breaking change = new `/v2` or contract major bump
+- Deprecate `/v1` for minimum 90 days before removal
