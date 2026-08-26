@@ -66,7 +66,7 @@ async def get_current_user(
             issuer=settings.issuer,
             options={"verify_aud": False},
         )
-    except (JWTError, StopIteration, httpx.HTTPError) as e:
+    except (JWTError, StopIteration, httpx.HTTPError, KeyError, TypeError) as e:
         raise HTTPException(status_code=401, detail="Invalid token") from e
 
     email = await _resolve_email(creds.credentials, payload)
@@ -84,15 +84,26 @@ async def get_current_user(
 async def require_education_subscription(
     user: dict = Depends(get_current_user),
 ) -> dict:
-    async with httpx.AsyncClient() as client:
-        res = await client.get(
-            f"{settings.subscriptions_api_url}/v1/users/me/subscriptions",
-            headers={"Authorization": f"Bearer {user['token']}"},
-            timeout=10,
-        )
-    if res.status_code != 200:
-        raise HTTPException(status_code=403, detail="Subscription check failed")
-    slugs = {item["productSlug"] for item in res.json().get("items", [])}
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.get(
+                f"{settings.subscriptions_api_url}/v1/users/me/subscriptions",
+                headers={"Authorization": f"Bearer {user['token']}"},
+                timeout=10,
+            )
+        if res.status_code != 200:
+            raise HTTPException(status_code=403, detail="Subscription check failed")
+        payload = res.json()
+        items = payload.get("items", []) if isinstance(payload, dict) else []
+        slugs = {
+            item.get("productSlug")
+            for item in items
+            if isinstance(item, dict) and item.get("productSlug")
+        }
+    except HTTPException:
+        raise
+    except (httpx.HTTPError, ValueError, TypeError) as e:
+        raise HTTPException(status_code=403, detail="Subscription check failed") from e
     if "education" not in slugs:
         raise HTTPException(status_code=403, detail="Education subscription required")
     return user

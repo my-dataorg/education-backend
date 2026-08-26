@@ -92,7 +92,7 @@ def main() -> int:
             "POST",
             f"{EDUCATION}/v1/institutes/{iid}/sections",
             headers=demo_h,
-            payload={"name": "Section A", "className": "Grade 10"},
+            payload={"name": "Section A", "className": "Grade 10", "gradeBand": "high"},
         )
         if status not in (200, 201):
             failures.append(f"Could not create section: {status}")
@@ -127,12 +127,41 @@ def main() -> int:
     teacher_h = {"Authorization": f"Bearer {teacher_token}"}
     student_h = {"Authorization": f"Bearer {student_token}"}
 
+    status, subject = request_json(
+        "POST",
+        f"{EDUCATION}/v1/institutes/{iid}/subjects",
+        headers=demo_h,
+        payload={"name": "Math"},
+    )
+    if status not in (200, 201):
+        failures.append(f"Create subject failed: {status}")
+        return 1
+    subject_id = subject.get("id")
+    status, _ = request_json(
+        "PUT",
+        f"{EDUCATION}/v1/institutes/{iid}/members/{teacher_id}/subjects",
+        headers=demo_h,
+        payload={"subjectIds": [subject_id]},
+    )
+    if status not in (200, 201):
+        failures.append(f"Set teacher subjects failed: {status}")
+
+    section_band = (sections[0].get("gradeBand") if sections else "high") or "high"
+    status, _ = request_json(
+        "PUT",
+        f"{EDUCATION}/v1/institutes/{iid}/members/{teacher_id}/grade-bands",
+        headers=demo_h,
+        payload={"gradeBands": [section_band]},
+    )
+    if status not in (200, 201):
+        failures.append(f"Set teacher grade bands failed: {status}")
+
     # T4.1 assign teacher
     status, _ = request_json(
         "POST",
         f"{EDUCATION}/v1/sections/{sid}/members",
         headers=demo_h,
-        payload={"userId": teacher_id, "memberType": "teacher"},
+        payload={"userId": teacher_id, "memberType": "teacher", "subjectId": subject_id},
     )
     if status not in (200, 201):
         failures.append(f"T4.1 assign teacher failed: {status}")
@@ -166,7 +195,7 @@ def main() -> int:
         "POST",
         f"{EDUCATION}/v1/sections/{sid}/assignments",
         headers=teacher_h,
-        payload={"title": "E2E Homework", "description": "Test"},
+        payload={"title": "E2E Homework", "description": "Test", "subjectId": subject_id},
     )
     if status not in (200, 201):
         failures.append(f"T4.5 create assignment failed: {status}")

@@ -69,7 +69,7 @@ async def search_users(query: str, *, limit: int = 10) -> list[dict]:
             if res.status_code != 200:
                 return []
             users = res.json()
-    except httpx.HTTPError:
+    except (httpx.HTTPError, ValueError, KeyError):
         return []
 
     results: list[dict] = []

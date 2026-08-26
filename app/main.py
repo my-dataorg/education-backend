@@ -1,14 +1,23 @@
 from contextlib import asynccontextmanager
 from datetime import date
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_user, require_education_subscription
 from app.config import settings
-from app.db.migrate import migrate_invitations, migrate_join_requests, run_migrations, seed_default_branches
+from app.db.migrate import (
+    migrate_classes,
+    migrate_grade_bands,
+    migrate_invitations,
+    migrate_join_requests,
+    migrate_subjects,
+    run_migrations,
+    seed_classes,
+    seed_default_branches,
+)
 from app.db.session import SessionLocal, engine, get_db
 from app.models import (
     Assignment,
@@ -20,6 +29,7 @@ from app.models import (
     InstituteMember,
     Section,
     SectionMember,
+    Subject,
     Submission,
     new_join_code,
 )
@@ -30,6 +40,9 @@ from app.schemas import (
     BranchCreate,
     BranchOut,
     BranchUpdate,
+    ClassCreate,
+    ClassOut,
+    ClassUpdate,
     InstituteCreate,
     InstituteDetailOut,
     InstituteOut,
@@ -49,14 +62,29 @@ from app.schemas import (
     MemberRoleUpdate,
     NoteCreate,
     NoteOut,
+    PendingWorkOut,
+    PeriodCreate,
+    PeriodOut,
     SectionCreate,
     SectionEnrollmentOut,
     SectionMemberAssign,
     SectionOut,
     SectionOverviewOut,
+    SubjectCreate,
+    SubjectOut,
     SubmissionCreate,
     SubmissionOut,
+    TeacherGradeBandsUpdate,
+    TeacherSubjectsUpdate,
     UserSearchOut,
+)
+from app.services.classes import (
+    create_class,
+    create_section as create_class_section,
+    delete_class,
+    get_or_create_class,
+    list_classes,
+    update_class,
 )
 from app.services.institutes import (
     ADMIN_ROLES,
@@ -79,6 +107,7 @@ from app.services.institutes import (
     require_membership,
     update_branch,
 )
+from app.services.pending_work import list_pending_work
 from app.services.sections import (
     assign_section_member,
     get_section_overview,
@@ -87,7 +116,27 @@ from app.services.sections import (
     remove_section_member,
     require_section_access,
     require_section_student,
-    require_section_teacher,
+    require_section_subject_teacher,
+)
+from app.services.grade_bands import (
+    grade_bands_by_user,
+    list_teacher_grade_bands,
+    set_teacher_grade_bands,
+)
+from app.services.periods import (
+    PeriodConflict,
+    create_period,
+    delete_period,
+    list_periods,
+    period_row,
+)
+from app.services.subjects import (
+    create_subject,
+    delete_subject,
+    list_subjects,
+    list_teacher_subjects,
+    set_teacher_subjects,
+    subjects_by_user,
 )
 from app.services.join_requests import (
     accept_join_request,
@@ -115,8 +164,12 @@ async def lifespan(_: FastAPI):
     run_migrations(engine)
     migrate_invitations(engine)
     migrate_join_requests(engine)
+    migrate_subjects(engine)
+    migrate_grade_bands(engine)
+    migrate_classes(engine)
     with SessionLocal() as db:
         seed_default_branches(db)
+        seed_classes(db)
     yield
 
 
@@ -143,9 +196,18 @@ def _section_out(db: Session, section: Section) -> SectionOut:
         id=section.id,
         name=section.name,
         className=section.class_name,
+        classId=section.class_id,
+        gradeBand=section.grade_band,
         branchId=section.branch_id,
         branchName=branch_name,
     )
+
+
+def _subject_name(db: Session, subject_id: str | None) -> str | None:
+    if not subject_id:
+        return None
+    subject = db.get(Subject, subject_id)
+    return subject.name if subject else None
 
 
 @app.get("/health")
@@ -282,7 +344,17 @@ def get_members(
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     members = list_members(db, institute_id, group)
-    rows = [{"userId": m.user_id, "role": m.role} for m in members]
+    by_user = subjects_by_user(db, institute_id)
+    bands_by_user = grade_bands_by_user(db, institute_id)
+    rows = [
+        {
+            "userId": m.user_id,
+            "role": m.role,
+            "subjects": by_user.get(m.user_id, []),
+            "gradeBands": bands_by_user.get(m.user_id, []),
+        }
+        for m in members
+    ]
     return [MemberOut(**row) for row in enrich_rows(rows)]
 
 
@@ -687,6 +759,114 @@ def update_member_role(
     return {"userId": member_user_id, "role": member.role}
 
 
+@app.get("/v1/institutes/{institute_id}/classes", response_model=list[ClassOut])
+def get_classes(
+    institute_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_membership(db, institute_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    out = []
+    for row in list_classes(db, institute_id):
+        count = db.scalar(
+            select(func.count()).select_from(Section).where(Section.class_id == row.id)
+        ) or 0
+        out.append(ClassOut(id=row.id, name=row.name, gradeBand=row.grade_band, sectionCount=count))
+    return out
+
+
+@app.post("/v1/institutes/{institute_id}/classes", response_model=ClassOut, status_code=201)
+def add_class(
+    institute_id: str,
+    body: ClassCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_manage(db, institute_id, user["id"])
+        row = create_class(db, institute_id, body.name, body.gradeBand)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return ClassOut(id=row.id, name=row.name, gradeBand=row.grade_band, sectionCount=0)
+
+
+@app.patch("/v1/institutes/{institute_id}/classes/{class_id}", response_model=ClassOut)
+def patch_class(
+    institute_id: str,
+    class_id: str,
+    body: ClassUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_manage(db, institute_id, user["id"])
+        row = update_class(db, institute_id, class_id, body.name, body.gradeBand)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        msg = str(e)
+        status = 404 if "not found" in msg.lower() else 400
+        raise HTTPException(status_code=status, detail=msg) from e
+    count = db.scalar(
+        select(func.count()).select_from(Section).where(Section.class_id == row.id)
+    ) or 0
+    return ClassOut(id=row.id, name=row.name, gradeBand=row.grade_band, sectionCount=count)
+
+
+@app.delete("/v1/institutes/{institute_id}/classes/{class_id}", status_code=204)
+def remove_class(
+    institute_id: str,
+    class_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_manage(db, institute_id, user["id"])
+        delete_class(db, institute_id, class_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        msg = str(e)
+        status = 404 if "not found" in msg.lower() else 400
+        raise HTTPException(status_code=status, detail=msg) from e
+
+
+@app.post(
+    "/v1/institutes/{institute_id}/classes/{class_id}/sections",
+    response_model=SectionOut,
+    status_code=201,
+)
+def add_section_under_class(
+    institute_id: str,
+    class_id: str,
+    body: SectionCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_admin(db, institute_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    if body.branchId:
+        branch = db.scalar(
+            select(Branch).where(Branch.id == body.branchId, Branch.institute_id == institute_id)
+        )
+        if not branch:
+            raise HTTPException(status_code=400, detail="Invalid branch")
+    try:
+        section = create_class_section(db, institute_id, class_id, body.name, body.branchId)
+    except ValueError as e:
+        msg = str(e)
+        status = 404 if "not found" in msg.lower() else 400
+        raise HTTPException(status_code=status, detail=msg) from e
+    return _section_out(db, section)
+
+
 @app.get("/v1/institutes/{institute_id}/sections", response_model=list[SectionOut])
 def list_sections(
     institute_id: str,
@@ -701,6 +881,183 @@ def list_sections(
         select(Section).where(Section.institute_id == institute_id).order_by(Section.name)
     )
     return [_section_out(db, s) for s in sections]
+
+
+@app.get("/v1/institutes/{institute_id}/subjects", response_model=list[SubjectOut])
+def get_subjects(
+    institute_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_membership(db, institute_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    return [SubjectOut(id=s.id, name=s.name) for s in list_subjects(db, institute_id)]
+
+
+@app.post("/v1/institutes/{institute_id}/subjects", response_model=SubjectOut, status_code=201)
+def add_subject(
+    institute_id: str,
+    body: SubjectCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_manage(db, institute_id, user["id"])
+        subject = create_subject(db, institute_id, body.name)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return SubjectOut(id=subject.id, name=subject.name)
+
+
+@app.delete("/v1/institutes/{institute_id}/subjects/{subject_id}", status_code=204)
+def remove_subject(
+    institute_id: str,
+    subject_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_manage(db, institute_id, user["id"])
+        delete_subject(db, institute_id, subject_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        msg = str(e)
+        status = 404 if "not found" in msg.lower() else 400
+        raise HTTPException(status_code=status, detail=msg) from e
+
+
+@app.put("/v1/institutes/{institute_id}/members/{member_user_id}/subjects", response_model=list[SubjectOut])
+def put_teacher_subjects(
+    institute_id: str,
+    member_user_id: str,
+    body: TeacherSubjectsUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_manage(db, institute_id, user["id"])
+        subjects = set_teacher_subjects(db, institute_id, member_user_id, body.subjectIds)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return [SubjectOut(id=s.id, name=s.name) for s in subjects]
+
+
+@app.get("/v1/institutes/{institute_id}/members/{member_user_id}/subjects", response_model=list[SubjectOut])
+def get_teacher_subjects(
+    institute_id: str,
+    member_user_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_directory_view(db, institute_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    return [
+        SubjectOut(id=s.id, name=s.name)
+        for s in list_teacher_subjects(db, institute_id, member_user_id)
+    ]
+
+
+@app.put(
+    "/v1/institutes/{institute_id}/members/{member_user_id}/grade-bands",
+    response_model=list[str],
+)
+def put_teacher_grade_bands(
+    institute_id: str,
+    member_user_id: str,
+    body: TeacherGradeBandsUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_manage(db, institute_id, user["id"])
+        return set_teacher_grade_bands(db, institute_id, member_user_id, body.gradeBands)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.get(
+    "/v1/institutes/{institute_id}/members/{member_user_id}/grade-bands",
+    response_model=list[str],
+)
+def get_teacher_grade_bands_route(
+    institute_id: str,
+    member_user_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_directory_view(db, institute_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    return list_teacher_grade_bands(db, institute_id, member_user_id)
+
+
+@app.get("/v1/institutes/{institute_id}/periods", response_model=list[PeriodOut])
+def get_periods(
+    institute_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_membership(db, institute_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    return [PeriodOut(**period_row(db, p)) for p in list_periods(db, institute_id)]
+
+
+@app.post("/v1/institutes/{institute_id}/periods", response_model=PeriodOut, status_code=201)
+def add_period(
+    institute_id: str,
+    body: PeriodCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_manage(db, institute_id, user["id"])
+        row = create_period(
+            db,
+            institute_id,
+            body.sectionId,
+            body.subjectId,
+            body.teacherUserId,
+            body.weekday,
+            body.startTime,
+            body.semester,
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except PeriodConflict as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return PeriodOut(**period_row(db, row))
+
+
+@app.delete("/v1/institutes/{institute_id}/periods/{period_id}", status_code=204)
+def remove_period(
+    institute_id: str,
+    period_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_manage(db, institute_id, user["id"])
+        delete_period(db, institute_id, period_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
 
 @app.post("/v1/institutes/{institute_id}/sections", response_model=SectionOut, status_code=201)
@@ -720,15 +1077,16 @@ def create_section(
         )
         if not branch:
             raise HTTPException(status_code=400, detail="Invalid branch")
-    section = Section(
-        institute_id=institute_id,
-        name=body.name,
-        class_name=body.className,
-        branch_id=body.branchId,
-    )
-    db.add(section)
-    db.commit()
-    db.refresh(section)
+    try:
+        if body.classId:
+            section = create_class_section(
+                db, institute_id, body.classId, body.name, body.branchId
+            )
+        else:
+            cls = get_or_create_class(db, institute_id, body.className, body.gradeBand)
+            section = create_class_section(db, institute_id, cls.id, body.name, body.branchId)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     return _section_out(db, section)
 
 
@@ -761,6 +1119,19 @@ def member_sections(
     ]
 
 
+@app.get("/v1/users/me/institutes/{institute_id}/pending-work", response_model=PendingWorkOut)
+def my_pending_work(
+    institute_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        items = list_pending_work(db, institute_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    return PendingWorkOut(items=items)
+
+
 @app.get("/v1/users/me/institutes/{institute_id}/sections", response_model=list[SectionOut])
 def my_sections(
     institute_id: str,
@@ -776,8 +1147,11 @@ def my_sections(
             id=r["id"],
             name=r["name"],
             className=r["className"],
+            classId=r.get("classId"),
+            gradeBand=r.get("gradeBand") or "primary",
             branchId=r.get("branchId"),
             branchName=r.get("branchName"),
+            subjectNames=r.get("subjectNames") or [],
         )
         for r in rows
     ]
@@ -795,18 +1169,19 @@ def assign_section_member_route(
         raise HTTPException(status_code=404, detail="Section not found")
     try:
         require_admin(db, section.institute_id, user["id"])
-        row = assign_section_member(db, section_id, body.userId, body.memberType)
+        row = assign_section_member(db, section_id, body.userId, body.memberType, body.subjectId)
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-    return {"sectionId": section_id, "userId": row.user_id, "memberType": row.member_type}
+    return {"sectionId": section_id, "userId": row.user_id, "memberType": row.member_type, "subjectId": row.subject_id}
 
 
 @app.delete("/v1/sections/{section_id}/members/{member_user_id}", status_code=204)
 def unassign_section_member(
     section_id: str,
     member_user_id: str,
+    subject_id: str | None = Query(default=None, alias="subjectId"),
     db: Session = Depends(get_db),
     user: User = Depends(require_education_subscription),
 ):
@@ -815,7 +1190,7 @@ def unassign_section_member(
         raise HTTPException(status_code=404, detail="Section not found")
     try:
         require_admin(db, section.institute_id, user["id"])
-        remove_section_member(db, section_id, member_user_id)
+        remove_section_member(db, section_id, member_user_id, subject_id)
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
 
@@ -847,12 +1222,12 @@ def assign_teacher(
         raise HTTPException(status_code=404, detail="Section not found")
     try:
         require_admin(db, section.institute_id, user["id"])
-        assign_section_member(db, section_id, body.userId, "teacher")
+        assign_section_member(db, section_id, body.userId, "teacher", body.subjectId)
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-    return {"sectionId": section_id, "userId": body.userId, "type": "teacher"}
+    return {"sectionId": section_id, "userId": body.userId, "type": "teacher", "subjectId": body.subjectId}
 
 
 @app.post("/v1/sections/{section_id}/students")
@@ -883,17 +1258,27 @@ def create_note(
     user: User = Depends(require_education_subscription),
 ):
     try:
-        require_section_teacher(db, section_id, user["id"])
+        require_section_subject_teacher(db, section_id, user["id"], body.subjectId)
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
-    note = DailyNote(section_id=section_id, teacher_id=user["id"], content=body.content)
+    note = DailyNote(
+        section_id=section_id,
+        teacher_id=user["id"],
+        subject_id=body.subjectId,
+        content=body.content,
+    )
     db.add(note)
     db.commit()
     db.refresh(note)
     return NoteOut(
-        id=note.id, content=note.content, noteDate=note.note_date, teacherId=note.teacher_id
+        id=note.id,
+        content=note.content,
+        noteDate=note.note_date,
+        teacherId=note.teacher_id,
+        subjectId=note.subject_id,
+        subjectName=_subject_name(db, note.subject_id),
     )
 
 
@@ -913,7 +1298,14 @@ def list_notes(
         select(DailyNote).where(DailyNote.section_id == section_id).order_by(DailyNote.note_date.desc())
     )
     return [
-        NoteOut(id=n.id, content=n.content, noteDate=n.note_date, teacherId=n.teacher_id)
+        NoteOut(
+            id=n.id,
+            content=n.content,
+            noteDate=n.note_date,
+            teacherId=n.teacher_id,
+            subjectId=n.subject_id,
+            subjectName=_subject_name(db, n.subject_id),
+        )
         for n in notes
     ]
 
@@ -926,13 +1318,14 @@ def create_assignment(
     user: User = Depends(require_education_subscription),
 ):
     try:
-        require_section_teacher(db, section_id, user["id"])
+        require_section_subject_teacher(db, section_id, user["id"], body.subjectId)
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     assignment = Assignment(
         section_id=section_id,
+        subject_id=body.subjectId,
         title=body.title,
         description=body.description,
         due_date=body.dueDate,
@@ -946,6 +1339,8 @@ def create_assignment(
         title=assignment.title,
         description=assignment.description,
         dueDate=assignment.due_date,
+        subjectId=assignment.subject_id,
+        subjectName=_subject_name(db, assignment.subject_id),
     )
 
 
@@ -963,7 +1358,14 @@ def list_assignments(
         raise HTTPException(status_code=404, detail=str(e)) from e
     items = db.scalars(select(Assignment).where(Assignment.section_id == section_id))
     return [
-        AssignmentOut(id=a.id, title=a.title, description=a.description, dueDate=a.due_date)
+        AssignmentOut(
+            id=a.id,
+            title=a.title,
+            description=a.description,
+            dueDate=a.due_date,
+            subjectId=a.subject_id,
+            subjectName=_subject_name(db, a.subject_id),
+        )
         for a in items
     ]
 

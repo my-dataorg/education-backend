@@ -18,7 +18,12 @@ if [[ ! -d .venv ]]; then
 fi
 
 # shellcheck disable=SC1091
-source .venv/bin/activate
+# Handle both Unix (bin/) and Windows Git Bash (Scripts/) venv layouts
+if [[ -f .venv/Scripts/activate ]]; then
+  source .venv/Scripts/activate
+else
+  source .venv/bin/activate
+fi
 pip install -q -r requirements.txt
 
 echo "Starting education-backend on http://localhost:${PORT}"

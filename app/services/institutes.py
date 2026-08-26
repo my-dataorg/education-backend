@@ -6,13 +6,18 @@ from sqlalchemy.orm import Session
 from app.models import (
     Assignment,
     Branch,
+    Class,
     DailyNote,
     Institute,
     InstituteInvitation,
     InstituteMember,
     Section,
     SectionMember,
+    Subject,
     Submission,
+    TeacherSubject,
+    TeacherGradeBand,
+    Period,
 )
 from app.roles import MANAGE_ROLES, STAFF_ROLES, STUDENT_ROLE, VIEW_DIRECTORY_ROLES
 from app.services.user_identity import enrich_rows
@@ -113,6 +118,18 @@ def remove_member(db: Session, institute_id: str, member_user_id: str) -> None:
         raise ValueError("Member not found")
     if member.role == "owner":
         raise PermissionError("Cannot remove the owner")
+    db.execute(
+        delete(TeacherSubject).where(
+            TeacherSubject.institute_id == institute_id,
+            TeacherSubject.user_id == member_user_id,
+        )
+    )
+    db.execute(
+        delete(TeacherGradeBand).where(
+            TeacherGradeBand.institute_id == institute_id,
+            TeacherGradeBand.user_id == member_user_id,
+        )
+    )
     db.delete(member)
     db.commit()
 
@@ -477,8 +494,13 @@ def delete_institute(db: Session, institute_id: str, user_id: str) -> None:
         db.execute(delete(Assignment).where(Assignment.section_id == section.id))
         db.execute(delete(DailyNote).where(DailyNote.section_id == section.id))
         db.execute(delete(SectionMember).where(SectionMember.section_id == section.id))
+        db.execute(delete(Period).where(Period.section_id == section.id))
 
     db.execute(delete(Section).where(Section.institute_id == institute_id))
+    db.execute(delete(Class).where(Class.institute_id == institute_id))
+    db.execute(delete(TeacherSubject).where(TeacherSubject.institute_id == institute_id))
+    db.execute(delete(TeacherGradeBand).where(TeacherGradeBand.institute_id == institute_id))
+    db.execute(delete(Subject).where(Subject.institute_id == institute_id))
     db.execute(delete(InstituteInvitation).where(InstituteInvitation.institute_id == institute_id))
     db.execute(delete(Branch).where(Branch.institute_id == institute_id))
     db.execute(delete(InstituteMember).where(InstituteMember.institute_id == institute_id))

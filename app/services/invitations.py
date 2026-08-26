@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 import logging
 
 from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models import Institute, InstituteInvitation, InstituteMember
@@ -74,7 +75,11 @@ def create_invitation(
         invited_by=invited_by,
     )
     db.add(inv)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as e:
+        db.rollback()
+        raise ValueError("Invitation already pending for this person") from e
     db.refresh(inv)
     _notify_invitation_created(db, inv)
     return inv

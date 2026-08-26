@@ -2,7 +2,7 @@ import secrets
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -42,7 +42,6 @@ class InstituteMember(Base):
 
 class InstituteInvitation(Base):
     __tablename__ = "institute_invitations"
-    __table_args__ = (UniqueConstraint("institute_id", "invitee_email", "status"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     institute_id: Mapped[str] = mapped_column(String(36), ForeignKey("institutes.id"))
@@ -70,24 +69,79 @@ class InstituteJoinRequest(Base):
     responded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class Class(Base):
+    __tablename__ = "classes"
+    __table_args__ = (UniqueConstraint("institute_id", "name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    institute_id: Mapped[str] = mapped_column(String(36), ForeignKey("institutes.id"))
+    name: Mapped[str] = mapped_column(String(200))
+    grade_band: Mapped[str] = mapped_column(String(16), default="primary")
+
+
 class Section(Base):
     __tablename__ = "sections"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     institute_id: Mapped[str] = mapped_column(String(36), ForeignKey("institutes.id"))
+    class_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("classes.id"), nullable=True)
     branch_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("branches.id"), nullable=True)
     name: Mapped[str] = mapped_column(String(200))
     class_name: Mapped[str] = mapped_column(String(200), default="")
+    grade_band: Mapped[str] = mapped_column(String(16), default="primary")
+
+
+class Subject(Base):
+    __tablename__ = "subjects"
+    __table_args__ = (UniqueConstraint("institute_id", "name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    institute_id: Mapped[str] = mapped_column(String(36), ForeignKey("institutes.id"))
+    name: Mapped[str] = mapped_column(String(120))
+
+
+class TeacherSubject(Base):
+    __tablename__ = "teacher_subjects"
+    __table_args__ = (UniqueConstraint("institute_id", "user_id", "subject_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    institute_id: Mapped[str] = mapped_column(String(36), ForeignKey("institutes.id"))
+    user_id: Mapped[str] = mapped_column(String(64))
+    subject_id: Mapped[str] = mapped_column(String(36), ForeignKey("subjects.id"))
+
+
+class TeacherGradeBand(Base):
+    __tablename__ = "teacher_grade_bands"
+    __table_args__ = (UniqueConstraint("institute_id", "user_id", "grade_band"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    institute_id: Mapped[str] = mapped_column(String(36), ForeignKey("institutes.id"))
+    user_id: Mapped[str] = mapped_column(String(64))
+    grade_band: Mapped[str] = mapped_column(String(16))
+
+
+class Period(Base):
+    __tablename__ = "periods"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    institute_id: Mapped[str] = mapped_column(String(36), ForeignKey("institutes.id"))
+    section_id: Mapped[str] = mapped_column(String(36), ForeignKey("sections.id"))
+    subject_id: Mapped[str] = mapped_column(String(36), ForeignKey("subjects.id"))
+    teacher_user_id: Mapped[str] = mapped_column(String(64))
+    semester: Mapped[str] = mapped_column(String(80))
+    weekday: Mapped[str] = mapped_column(String(80))
+    start_time: Mapped[str] = mapped_column(String(5))
+    duration_minutes: Mapped[int] = mapped_column(Integer, default=60)
 
 
 class SectionMember(Base):
     __tablename__ = "section_members"
-    __table_args__ = (UniqueConstraint("section_id", "user_id", "member_type"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     section_id: Mapped[str] = mapped_column(String(36), ForeignKey("sections.id"))
     user_id: Mapped[str] = mapped_column(String(64))
     member_type: Mapped[str] = mapped_column(String(16))  # teacher, student
+    subject_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("subjects.id"), nullable=True)
 
 
 class DailyNote(Base):
@@ -96,6 +150,7 @@ class DailyNote(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     section_id: Mapped[str] = mapped_column(String(36), ForeignKey("sections.id"))
     teacher_id: Mapped[str] = mapped_column(String(64))
+    subject_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("subjects.id"), nullable=True)
     content: Mapped[str] = mapped_column(Text)
     note_date: Mapped[date] = mapped_column(Date, server_default=func.current_date())
 
@@ -105,6 +160,7 @@ class Assignment(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     section_id: Mapped[str] = mapped_column(String(36), ForeignKey("sections.id"))
+    subject_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("subjects.id"), nullable=True)
     title: Mapped[str] = mapped_column(String(200))
     description: Mapped[str] = mapped_column(Text, default="")
     due_date: Mapped[date | None] = mapped_column(Date, nullable=True)

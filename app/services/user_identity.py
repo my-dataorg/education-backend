@@ -1,6 +1,14 @@
 from __future__ import annotations
 
-from app.services.keycloak_users import get_users_brief
+from app.config import settings
+from app.platform_client import get_users_brief as get_platform_users_brief
+from app.services.keycloak_users import get_users_brief as get_keycloak_users_brief
+
+
+def get_users_brief(user_ids: list[str]) -> dict[str, dict]:
+    if settings.use_platform_auth:
+        return get_platform_users_brief(user_ids)
+    return get_keycloak_users_brief(user_ids)
 
 
 def _empty_identity(user_id: str) -> dict:

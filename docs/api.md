@@ -54,6 +54,7 @@ Header: `Authorization: Bearer <JWT>` · Optional: `X-User-Email` for invitation
 |--------|------|-------------|
 | GET | `/v1/institutes/{id}/members/{userId}/sections` | Admin: member enrollments |
 | GET | `/v1/users/me/institutes/{id}/sections` | Current user's enrolled sections |
+| GET | `/v1/users/me/institutes/{id}/pending-work` | All incomplete assignments for the current teacher/student, with due dates |
 | POST | `/v1/sections/{id}/members` | Assign `{ userId, memberType }` |
 | DELETE | `/v1/sections/{id}/members/{userId}` | Remove enrollment |
 | GET | `/v1/sections/{id}/overview` | Students, assignments, progress |

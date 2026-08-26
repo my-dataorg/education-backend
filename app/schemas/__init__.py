@@ -42,6 +42,8 @@ class MemberOut(BaseModel):
     displayName: str = ""
     email: str = ""
     username: str = ""
+    subjects: list[dict] = []
+    gradeBands: list[str] = []
 
 
 class MemberAdd(BaseModel):
@@ -221,6 +223,8 @@ class BranchOut(BaseModel):
 class SectionCreate(BaseModel):
     name: str
     className: str = ""
+    classId: str | None = None
+    gradeBand: str = "primary"
     branchId: str | None = None
 
 
@@ -228,17 +232,79 @@ class SectionOut(BaseModel):
     id: str
     name: str
     className: str
+    classId: str | None = None
+    gradeBand: str = "primary"
     branchId: str | None = None
     branchName: str | None = None
+    subjectNames: list[str] = []
+
+
+class ClassCreate(BaseModel):
+    name: str
+    gradeBand: str = "primary"
+
+
+class ClassUpdate(BaseModel):
+    name: str | None = None
+    gradeBand: str | None = None
+
+
+class ClassOut(BaseModel):
+    id: str
+    name: str
+    gradeBand: str
+    sectionCount: int = 0
+
+
+class SubjectCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+
+
+class SubjectOut(BaseModel):
+    id: str
+    name: str
+
+
+class TeacherSubjectsUpdate(BaseModel):
+    subjectIds: list[str]
+
+
+class TeacherGradeBandsUpdate(BaseModel):
+    gradeBands: list[str]
+
+
+class PeriodCreate(BaseModel):
+    sectionId: str
+    subjectId: str
+    teacherUserId: str
+    semester: str = Field(min_length=1, max_length=80)
+    weekday: str = Field(min_length=1, max_length=80)
+    startTime: str
+
+
+class PeriodOut(BaseModel):
+    id: str
+    sectionId: str
+    sectionName: str
+    className: str
+    subjectId: str
+    subjectName: str
+    teacherUserId: str
+    semester: str
+    weekday: str
+    startTime: str
+    durationMinutes: int
 
 
 class AssignMember(BaseModel):
     userId: str
+    subjectId: str | None = None
 
 
 class SectionMemberAssign(BaseModel):
     userId: str
     memberType: str = Field(pattern="^(teacher|student)$")
+    subjectId: str | None = None
 
 
 class SectionEnrollmentOut(BaseModel):
@@ -274,6 +340,7 @@ class SectionOverviewOut(BaseModel):
 
 class NoteCreate(BaseModel):
     content: str
+    subjectId: str
 
 
 class NoteOut(BaseModel):
@@ -281,12 +348,15 @@ class NoteOut(BaseModel):
     content: str
     noteDate: date
     teacherId: str
+    subjectId: str | None = None
+    subjectName: str | None = None
 
 
 class AssignmentCreate(BaseModel):
     title: str
     description: str = ""
     dueDate: date | None = None
+    subjectId: str
 
 
 class AssignmentOut(BaseModel):
@@ -294,6 +364,8 @@ class AssignmentOut(BaseModel):
     title: str
     description: str
     dueDate: date | None
+    subjectId: str | None = None
+    subjectName: str | None = None
 
 
 class SubmissionCreate(BaseModel):
@@ -304,3 +376,15 @@ class SubmissionOut(BaseModel):
     id: str
     content: str
     studentId: str
+
+
+class PendingWorkItemOut(BaseModel):
+    kind: str
+    title: str
+    detail: str
+    href: str | None = None
+    dueDate: date | None = None
+
+
+class PendingWorkOut(BaseModel):
+    items: list[PendingWorkItemOut]
