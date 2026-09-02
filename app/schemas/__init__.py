@@ -296,6 +296,24 @@ class PeriodOut(BaseModel):
     durationMinutes: int
 
 
+class TodayClassOut(BaseModel):
+    periodId: str
+    sectionId: str
+    className: str
+    sectionName: str
+    subjectId: str
+    subjectName: str
+    startTime: str
+    endTime: str
+    durationMinutes: int
+    href: str
+
+
+class TodayClassesOut(BaseModel):
+    weekday: str
+    items: list[TodayClassOut]
+
+
 class AssignMember(BaseModel):
     userId: str
     subjectId: str | None = None
@@ -334,7 +352,7 @@ class SectionOverviewOut(BaseModel):
     notesCount: int
     averageCompletionPercent: int | None
     assignments: list[SectionOverviewAssignment]
-    students: list[dict] | None = None
+    students: list[dict] = []
     teachers: list[dict] | None = None
 
 

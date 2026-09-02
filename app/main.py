@@ -65,6 +65,7 @@ from app.schemas import (
     PendingWorkOut,
     PeriodCreate,
     PeriodOut,
+    TodayClassesOut,
     SectionCreate,
     SectionEnrollmentOut,
     SectionMemberAssign,
@@ -127,6 +128,7 @@ from app.services.periods import (
     PeriodConflict,
     create_period,
     delete_period,
+    list_my_classes_for_day,
     list_periods,
     period_row,
 )
@@ -1130,6 +1132,21 @@ def my_pending_work(
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     return PendingWorkOut(items=items)
+
+
+@app.get("/v1/users/me/institutes/{institute_id}/today-classes", response_model=TodayClassesOut)
+def my_today_classes(
+    institute_id: str,
+    weekday: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        return list_my_classes_for_day(db, institute_id, user["id"], weekday)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @app.get("/v1/users/me/institutes/{institute_id}/sections", response_model=list[SectionOut])

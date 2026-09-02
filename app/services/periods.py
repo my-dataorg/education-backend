@@ -1,7 +1,12 @@
+from datetime import date
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Period, Section, SectionMember, Subject
+from app.roles import STUDENT_ROLE
+from app.services.institutes import require_membership
+from app.services.sections import list_my_enrolled_sections
 
 PERIOD_MINUTES = 60
 WEEKDAYS = (
@@ -85,6 +90,53 @@ def list_periods(db: Session, institute_id: str) -> list[Period]:
             .order_by(Period.weekday, Period.start_time)
         )
     )
+
+
+def _end_clock(start_time: str, duration_minutes: int) -> str:
+    total = _minutes(start_time) + duration_minutes
+    return f"{(total // 60) % 24:02d}:{total % 60:02d}"
+
+
+def list_my_classes_for_day(
+    db: Session,
+    institute_id: str,
+    user_id: str,
+    weekday: str | None = None,
+) -> dict:
+    member = require_membership(db, institute_id, user_id)
+    day = (weekday or WEEKDAYS[date.today().weekday()]).strip().lower()
+    if day not in WEEKDAYS:
+        raise ValueError("Weekday must be a day of the week")
+
+    enrolled_ids = set()
+    if member.role == STUDENT_ROLE:
+        enrolled_ids = {row["id"] for row in list_my_enrolled_sections(db, institute_id, user_id)}
+    items = []
+    for period in list_periods(db, institute_id):
+        if day not in _days(period.weekday):
+            continue
+        taught_by_me = period.teacher_user_id == user_id
+        student_in_section = member.role == STUDENT_ROLE and period.section_id in enrolled_ids
+        if not taught_by_me and not student_in_section:
+            continue
+        row = period_row(db, period)
+        duration = period.duration_minutes or PERIOD_MINUTES
+        items.append(
+            {
+                "periodId": period.id,
+                "sectionId": period.section_id,
+                "className": row["className"],
+                "sectionName": row["sectionName"],
+                "subjectId": period.subject_id,
+                "subjectName": row["subjectName"],
+                "startTime": period.start_time,
+                "endTime": _end_clock(period.start_time, duration),
+                "durationMinutes": duration,
+                "href": f"/institutes/{institute_id}/sections/{period.section_id}",
+            }
+        )
+    items.sort(key=lambda item: item["startTime"])
+    return {"weekday": day, "items": items}
 
 
 def period_row(db: Session, period: Period) -> dict:

@@ -252,6 +252,20 @@ def require_section_student(db: Session, section_id: str, user_id: str) -> Secti
     return section
 
 
+def _roster_student_row(row: dict, *, include_contact: bool) -> dict:
+    public = {
+        "userId": row.get("userId"),
+        "firstName": row.get("firstName") or "",
+        "lastName": row.get("lastName") or "",
+        "displayName": row.get("displayName") or "",
+    }
+    if not include_contact:
+        return public
+    public["email"] = row.get("email") or ""
+    public["username"] = row.get("username") or ""
+    return public
+
+
 def get_section_overview(db: Session, section_id: str, user_id: str) -> dict:
     section = require_section_access(db, section_id, user_id)
     institute_member = get_membership(db, section.institute_id, user_id)
@@ -320,9 +334,12 @@ def get_section_overview(db: Session, section_id: str, user_id: str) -> dict:
         "notesCount": notes_count,
         "averageCompletionPercent": avg_completion,
         "assignments": assignment_rows,
+        "students": [
+            _roster_student_row(row, include_contact=bool(is_teacher_view))
+            for row in enrich_rows([{"userId": s.user_id} for s in students])
+        ],
     }
     if is_teacher_view:
-        overview["students"] = enrich_rows([{"userId": s.user_id} for s in students])
         teacher_rows = []
         for t in teachers:
             subject = db.get(Subject, t.subject_id) if t.subject_id else None
