@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.services.keycloak_users import get_users_brief
+from app.services.platform_users import get_users_brief
 
 
 def _empty_identity(user_id: str) -> dict:

@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.models import Institute, InstituteInvitation, InstituteMember
 from app.platform_client import notify_user
 from app.roles import ALL_ASSIGNABLE_ROLES, ROLE_LABELS
-from app.services.keycloak_users import find_user_id_by_email
+from app.services.platform_users import find_user_id_by_email
 from app.services.membership_hooks import on_member_joined
 
 logger = logging.getLogger(__name__)

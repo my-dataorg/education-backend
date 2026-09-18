@@ -103,7 +103,7 @@ from app.services.invitations import (
     list_user_pending_invitations,
     reject_invitation,
 )
-from app.services.keycloak_users import search_users
+from app.services.platform_users import search_users
 from app.services.user_identity import enrich_rows, identity_for_user
 
 User = dict
@@ -474,7 +474,7 @@ def my_join_requests(
 
 
 @app.get("/v1/institutes/{institute_id}/users/search", response_model=list[UserSearchOut])
-async def search_institute_users(
+def search_institute_users(
     institute_id: str,
     q: str,
     db: Session = Depends(get_db),
@@ -486,7 +486,7 @@ async def search_institute_users(
         require_manage(db, institute_id, user["id"])
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
-    rows = await search_users(q.strip())
+    rows = search_users(q.strip())
     return [UserSearchOut(**row) for row in rows]
 
 
