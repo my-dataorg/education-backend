@@ -1,0 +1,17 @@
+name: Deploy education backend
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_ref:
+        description: Immutable GHCR image reference using a sha256 digest
+        required: true
+        type: string
+
+jobs:
+  deploy:
+    uses: my-dataorg/mydata/.github/workflows/deploy-service.yml@main
+    with:
+      service: education-backend
+      image: ${{ inputs.image_ref }}
+    secrets: inherit
