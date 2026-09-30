@@ -1,0 +1,156 @@
+name: Deploy one service
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        required: true
+        type: string
+      image:
+        required: true
+        type: string
+    secrets:
+      DEPLOY_HOST:
+        required: true
+      DEPLOY_USER:
+        required: true
+      DEPLOY_SSH_KEY:
+        required: true
+      DEPLOY_KNOWN_HOSTS:
+        required: true
+      GHCR_USERNAME:
+        required: true
+      GHCR_TOKEN:
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/opt/mydata/production' }}
+    steps:
+      - name: Validate image reference
+        env:
+          SERVICE: ${{ inputs.service }}
+          IMAGE: ${{ inputs.image }}
+        run: |
+          case "$SERVICE" in
+            platform-backend|education-backend|social-backend|pokerworld-backend|business-backend|platform-frontend|education-frontend|pokerworld-frontend|business-frontend) ;;
+            *) echo "Unknown service: $SERVICE" >&2; exit 1 ;;
+          esac
+          if [[ ! "$IMAGE" =~ ^ghcr\.io/my-dataorg/${SERVICE}@sha256:[0-9a-f]{64}$ ]]; then
+            echo "Use an immutable GHCR image for $SERVICE" >&2
+            exit 1
+          fi
+
+      - name: Configure SSH
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$SSH_KEY" > "$HOME/.ssh/deploy_key"
+          printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/deploy_key" "$HOME/.ssh/known_hosts"
+
+      - name: Prepare service override
+        env:
+          SERVICE: ${{ inputs.service }}
+          IMAGE: ${{ inputs.image }}
+        run: |
+          variable=$(printf '%s' "$SERVICE" | tr '[:lower:]-' '[:upper:]_')_IMAGE
+          printf '%s=%s\n' "$variable" "$IMAGE" > service.env
+
+      - name: Upload service override
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          set -euo pipefail
+          ssh -i "$HOME/.ssh/deploy_key" -o StrictHostKeyChecking=yes -o BatchMode=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "mkdir -p '$DEPLOY_PATH'"
+          ssh -i "$HOME/.ssh/deploy_key" -o StrictHostKeyChecking=yes -o BatchMode=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "cat > '$DEPLOY_PATH/service.env.next'" < service.env
+
+      - name: Pull and restart one service
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          SERVICE: ${{ inputs.service }}
+          IMAGE: ${{ inputs.image }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" | ssh -i "$HOME/.ssh/deploy_key" \
+            -o StrictHostKeyChecking=yes -o BatchMode=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "docker login ghcr.io --username '$GHCR_USERNAME' --password-stdin"
+
+          ssh -i "$HOME/.ssh/deploy_key" \
+            -o StrictHostKeyChecking=yes -o BatchMode=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "DEPLOY_PATH='$DEPLOY_PATH' SERVICE='$SERVICE' IMAGE='$IMAGE' bash -s" <<'REMOTE'
+          set -eu
+          cd "$DEPLOY_PATH"
+          image_variable=$(printf '%s' "$SERVICE" | tr '[:lower:]-' '[:upper:]_')_IMAGE
+          export "$image_variable=$IMAGE"
+          [ -f service.env ] && cp service.env service.env.previous || true
+          mv service.env.next service.env
+
+          compose() {
+            args=(--env-file .env)
+            [ -f image.env ] && args+=(--env-file image.env)
+            [ -f service.env ] && args+=(--env-file service.env)
+            docker compose "${args[@]}" "$@"
+          }
+
+          rollback() {
+            if [ -f service.env.previous ]; then
+              cp service.env.previous service.env
+            else
+              rm -f service.env
+            fi
+            compose pull "$SERVICE" || true
+            compose up -d --no-deps "$SERVICE" || true
+            exit 1
+          }
+          trap rollback ERR
+
+          compose pull "$SERVICE"
+          compose up -d --no-deps "$SERVICE"
+
+          container=$(compose ps -q "$SERVICE")
+          [ -n "$container" ] || rollback
+          case "$SERVICE" in
+            platform-backend) check="python -c 'from urllib.request import urlopen; urlopen(\"http://127.0.0.1:8002/health\", timeout=2)'" ;;
+            education-backend) check="python -c 'from urllib.request import urlopen; urlopen(\"http://127.0.0.1:8010/health\", timeout=2)'" ;;
+            social-backend) check="python -c 'from urllib.request import urlopen; urlopen(\"http://127.0.0.1:8020/health\", timeout=2)'" ;;
+            pokerworld-backend) check="python -c 'from urllib.request import urlopen; urlopen(\"http://127.0.0.1:8030/health\", timeout=2)'" ;;
+            business-backend) check="python -c 'from urllib.request import urlopen; urlopen(\"http://127.0.0.1:8040/health\", timeout=2)'" ;;
+            platform-frontend) check="node -e 'fetch(\"http://127.0.0.1:3000/api/auth/session\").then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))'" ;;
+            education-frontend) check="node -e 'fetch(\"http://127.0.0.1:3010/api/auth/session\").then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))'" ;;
+            pokerworld-frontend) check="node -e 'fetch(\"http://127.0.0.1:3110/api/auth/session\").then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))'" ;;
+            business-frontend) check="node -e 'fetch(\"http://127.0.0.1:3120/api/auth/session\").then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))'" ;;
+          esac
+          for attempt in $(seq 1 30); do
+            if docker exec "$container" sh -c "$check" >/dev/null 2>&1; then
+              break
+            fi
+            [ "$attempt" = 30 ] && rollback
+            sleep 5
+          done
+          trap - ERR
+          rm -f service.env.previous
+          docker logout ghcr.io >/dev/null 2>&1 || true
+          docker image prune -f
+          REMOTE

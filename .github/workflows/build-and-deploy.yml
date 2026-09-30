@@ -34,8 +34,14 @@ jobs:
 
   deploy:
     needs: build
-    uses: my-dataorg/mydata/.github/workflows/deploy-service.yml@main
+    uses: ./.github/workflows/deploy-service.yml
     with:
       service: education-backend
       image: ${{ needs.build.outputs.image }}
-    secrets: inherit
+    secrets:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+      DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+      GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+      GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
