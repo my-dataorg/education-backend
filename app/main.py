@@ -8,7 +8,13 @@ from sqlalchemy.orm import Session
 
 from app.auth import get_current_user, require_education_subscription
 from app.config import settings
-from app.db.migrate import migrate_invitations, migrate_join_requests, run_migrations, seed_default_branches
+from app.db.migrate import (
+    migrate_invitations,
+    migrate_join_requests,
+    migrate_subjects,
+    run_migrations,
+    seed_default_branches,
+)
 from app.db.session import SessionLocal, engine, get_db
 from app.models import (
     Assignment,
@@ -50,12 +56,18 @@ from app.schemas import (
     NoteCreate,
     NoteOut,
     SectionCreate,
+    SectionSubjectAssign,
+    SectionSubjectOut,
     SectionEnrollmentOut,
     SectionMemberAssign,
     SectionOut,
     SectionOverviewOut,
+    SubjectCreate,
+    SubjectOut,
     SubmissionCreate,
     SubmissionOut,
+    TeacherSubjectAssign,
+    TeacherSubjectOut,
     UserSearchOut,
 )
 from app.services.institutes import (
@@ -77,6 +89,7 @@ from app.services.institutes import (
     require_directory_view,
     require_manage,
     require_membership,
+    require_owner,
     update_branch,
 )
 from app.services.sections import (
@@ -104,6 +117,16 @@ from app.services.invitations import (
     reject_invitation,
 )
 from app.services.platform_users import search_users
+from app.services.subjects import (
+    assign_teacher as assign_subject_teacher,
+    create_subject,
+    delete_subject,
+    link_subject,
+    list_section_subjects,
+    list_subjects,
+    unlink_subject,
+    unassign_teacher,
+)
 from app.services.user_identity import enrich_rows, identity_for_user
 
 User = dict
@@ -115,6 +138,7 @@ async def lifespan(_: FastAPI):
     run_migrations(engine)
     migrate_invitations(engine)
     migrate_join_requests(engine)
+    migrate_subjects(engine)
     with SessionLocal() as db:
         seed_default_branches(db)
     yield
@@ -311,7 +335,7 @@ def add_institute_member(
     user: User = Depends(require_education_subscription),
 ):
     try:
-        require_manage(db, institute_id, user["id"])
+        require_owner(db, institute_id, user["id"])
         member = add_member(db, institute_id, body.userId, body.role)
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
@@ -378,13 +402,12 @@ def send_invitation(
     user: User = Depends(require_education_subscription),
 ):
     try:
-        require_manage(db, institute_id, user["id"])
+        require_owner(db, institute_id, user["id"])
         inv = create_invitation(
             db,
             institute_id,
             body.role,
             user["id"],
-            email=body.email,
             user_id=body.userId,
         )
     except PermissionError as e:
@@ -572,7 +595,7 @@ def get_branches(
     user: User = Depends(require_education_subscription),
 ):
     try:
-        require_admin(db, institute_id, user["id"])
+        require_owner(db, institute_id, user["id"])
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     branches = list_branches(db, institute_id)
@@ -694,7 +717,7 @@ def list_sections(
     user: User = Depends(require_education_subscription),
 ):
     try:
-        require_membership(db, institute_id, user["id"])
+        require_owner(db, institute_id, user["id"])
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     sections = db.scalars(
@@ -711,7 +734,7 @@ def create_section(
     user: User = Depends(require_education_subscription),
 ):
     try:
-        require_admin(db, institute_id, user["id"])
+        require_owner(db, institute_id, user["id"])
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     if body.branchId:
@@ -730,6 +753,162 @@ def create_section(
     db.commit()
     db.refresh(section)
     return _section_out(db, section)
+
+
+@app.get("/v1/institutes/{institute_id}/subjects", response_model=list[SubjectOut])
+def get_subjects(
+    institute_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_owner(db, institute_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    return [SubjectOut(id=s.id, name=s.name) for s in list_subjects(db, institute_id)]
+
+
+@app.post("/v1/institutes/{institute_id}/subjects", response_model=SubjectOut, status_code=201)
+def add_subject(
+    institute_id: str,
+    body: SubjectCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_owner(db, institute_id, user["id"])
+        subject = create_subject(db, institute_id, body.name)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    return SubjectOut(id=subject.id, name=subject.name)
+
+
+@app.delete("/v1/institutes/{institute_id}/subjects/{subject_id}", status_code=204)
+def remove_subject(
+    institute_id: str,
+    subject_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_owner(db, institute_id, user["id"])
+        delete_subject(db, institute_id, subject_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@app.get("/v1/sections/{section_id}/subjects", response_model=list[SectionSubjectOut])
+def get_section_subjects(
+    section_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    section = db.get(Section, section_id)
+    if not section:
+        raise HTTPException(status_code=404, detail="Section not found")
+    try:
+        require_section_access(db, section_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    return [
+        SectionSubjectOut(
+            id=row["id"],
+            name=row["name"],
+            teachers=[TeacherSubjectOut(userId=user_id) for user_id in row["teachers"]],
+        )
+        for row in list_section_subjects(db, section_id)
+    ]
+
+
+@app.post("/v1/sections/{section_id}/subjects", response_model=SectionSubjectOut, status_code=201)
+def add_section_subject(
+    section_id: str,
+    body: SectionSubjectAssign,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        section = db.get(Section, section_id)
+        if not section:
+            raise ValueError("Section not found")
+        require_owner(db, section.institute_id, user["id"])
+        subject = link_subject(db, section_id, body.subjectId)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return SectionSubjectOut(id=subject.id, name=subject.name)
+
+
+@app.delete("/v1/sections/{section_id}/subjects/{subject_id}", status_code=204)
+def remove_section_subject(
+    section_id: str,
+    subject_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        section = db.get(Section, section_id)
+        if not section:
+            raise ValueError("Section not found")
+        require_owner(db, section.institute_id, user["id"])
+        unlink_subject(db, section_id, subject_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@app.post(
+    "/v1/sections/{section_id}/subjects/{subject_id}/teachers",
+    response_model=TeacherSubjectOut,
+    status_code=201,
+)
+def add_subject_teacher(
+    section_id: str,
+    subject_id: str,
+    body: TeacherSubjectAssign,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        section = db.get(Section, section_id)
+        if not section:
+            raise ValueError("Section not found")
+        require_owner(db, section.institute_id, user["id"])
+        assign_subject_teacher(db, section_id, subject_id, body.userId)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return TeacherSubjectOut(userId=body.userId)
+
+
+@app.delete(
+    "/v1/sections/{section_id}/subjects/{subject_id}/teachers/{teacher_id}",
+    status_code=204,
+)
+def remove_subject_teacher(
+    section_id: str,
+    subject_id: str,
+    teacher_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        section = db.get(Section, section_id)
+        if not section:
+            raise ValueError("Section not found")
+        require_owner(db, section.institute_id, user["id"])
+        unassign_teacher(db, section_id, subject_id, teacher_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
 
 @app.get(
@@ -794,7 +973,7 @@ def assign_section_member_route(
     if not section:
         raise HTTPException(status_code=404, detail="Section not found")
     try:
-        require_admin(db, section.institute_id, user["id"])
+        require_owner(db, section.institute_id, user["id"])
         row = assign_section_member(db, section_id, body.userId, body.memberType)
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
@@ -814,7 +993,7 @@ def unassign_section_member(
     if not section:
         raise HTTPException(status_code=404, detail="Section not found")
     try:
-        require_admin(db, section.institute_id, user["id"])
+        require_owner(db, section.institute_id, user["id"])
         remove_section_member(db, section_id, member_user_id)
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
@@ -846,7 +1025,7 @@ def assign_teacher(
     if not section:
         raise HTTPException(status_code=404, detail="Section not found")
     try:
-        require_admin(db, section.institute_id, user["id"])
+        require_owner(db, section.institute_id, user["id"])
         assign_section_member(db, section_id, body.userId, "teacher")
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
@@ -866,7 +1045,7 @@ def assign_student(
     if not section:
         raise HTTPException(status_code=404, detail="Section not found")
     try:
-        require_admin(db, section.institute_id, user["id"])
+        require_owner(db, section.institute_id, user["id"])
         assign_section_member(db, section_id, body.userId, "student")
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e

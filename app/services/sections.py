@@ -89,6 +89,8 @@ def assign_section_member(
 
     if member_type == "teacher" and institute_member.role not in TEACHER_ROLES:
         raise ValueError("User must be teaching staff")
+    if member_type == "student" and institute_member.role != "student":
+        raise ValueError("User must be a student")
 
     existing = db.scalar(
         select(SectionMember).where(
@@ -158,7 +160,15 @@ def require_section_student(db: Session, section_id: str, user_id: str) -> Secti
 def get_section_overview(db: Session, section_id: str, user_id: str) -> dict:
     section = require_section_access(db, section_id, user_id)
     institute_member = get_membership(db, section.institute_id, user_id)
-    is_teacher_view = institute_member and institute_member.role in TEACHER_ROLES
+    assignment_type = db.scalar(
+        select(SectionMember.member_type).where(
+            SectionMember.section_id == section_id,
+            SectionMember.user_id == user_id,
+        )
+    )
+    can_view_roster = institute_member and (
+        institute_member.role in MANAGE_ROLES or assignment_type == "teacher"
+    )
 
     students = list(
         db.scalars(
@@ -224,7 +234,7 @@ def get_section_overview(db: Session, section_id: str, user_id: str) -> dict:
         "averageCompletionPercent": avg_completion,
         "assignments": assignment_rows,
     }
-    if is_teacher_view:
+    if can_view_roster:
         overview["students"] = enrich_rows([{"userId": s.user_id} for s in students])
         overview["teachers"] = enrich_rows([{"userId": t.user_id} for t in teachers])
     return overview

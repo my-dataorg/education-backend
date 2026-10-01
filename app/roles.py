@@ -8,6 +8,7 @@ VIEW_DIRECTORY_ROLES = STAFF_ROLES
 STAFF_MANAGEABLE_ROLES = frozenset({"admin", "principal", "teacher", "lecturer", "professor"})
 STUDENT_ROLE = "student"
 ALL_ASSIGNABLE_ROLES = STAFF_MANAGEABLE_ROLES | {STUDENT_ROLE}
+INVITATION_ROLES = frozenset({"teacher", STUDENT_ROLE})
 
 ROLE_LABELS = {
     "owner": "Owner",

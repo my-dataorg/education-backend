@@ -1,20 +1,18 @@
 from datetime import datetime, timezone
 import logging
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models import Institute, InstituteInvitation, InstituteMember
 from app.platform_client import notify_user
-from app.roles import ALL_ASSIGNABLE_ROLES, ROLE_LABELS
-from app.services.platform_users import find_user_id_by_email
+from app.roles import INVITATION_ROLES, ROLE_LABELS
+from app.services.institutes import get_membership
 from app.services.membership_hooks import on_member_joined
+from app.services.platform_users import get_users_brief
 
 logger = logging.getLogger(__name__)
-
-
-def _normalize_email(email: str) -> str:
-    return email.strip().lower()
 
 
 def create_invitation(
@@ -26,55 +24,47 @@ def create_invitation(
     email: str | None = None,
     user_id: str | None = None,
 ) -> InstituteInvitation:
-    if role not in ALL_ASSIGNABLE_ROLES:
+    if role not in INVITATION_ROLES:
         raise ValueError("Invalid role for invitation")
 
-    normalized_email = _normalize_email(email) if email else ""
-    if not normalized_email and not user_id:
-        raise ValueError("Email or user ID is required")
+    if not user_id:
+        raise ValueError("User ID is required")
+    if user_id not in get_users_brief([user_id]):
+        raise ValueError("Platform user not found")
 
-    if user_id:
-        existing_member = db.scalar(
-            select(InstituteMember).where(
-                InstituteMember.institute_id == institute_id,
-                InstituteMember.user_id == user_id,
-            )
+    existing_member = db.scalar(
+        select(InstituteMember).where(
+            InstituteMember.institute_id == institute_id,
+            InstituteMember.user_id == user_id,
         )
-        if existing_member:
-            raise ValueError("User is already a member")
+    )
+    if existing_member:
+        raise ValueError("User is already a member")
 
-    if normalized_email:
-        pending = db.scalar(
-            select(InstituteInvitation).where(
-                InstituteInvitation.institute_id == institute_id,
-                func.lower(InstituteInvitation.invitee_email) == normalized_email,
-                InstituteInvitation.status == "pending",
-            )
+    pending_by_id = db.scalar(
+        select(InstituteInvitation).where(
+            InstituteInvitation.institute_id == institute_id,
+            InstituteInvitation.invitee_user_id == user_id,
+            InstituteInvitation.status == "pending",
         )
-        if pending:
-            raise ValueError("Invitation already pending for this email")
-
-    if user_id:
-        pending_by_id = db.scalar(
-            select(InstituteInvitation).where(
-                InstituteInvitation.institute_id == institute_id,
-                InstituteInvitation.invitee_user_id == user_id,
-                InstituteInvitation.status == "pending",
-            )
-        )
-        if pending_by_id:
-            raise ValueError("Invitation already pending for this user")
+    )
+    if pending_by_id:
+        raise ValueError("Invitation already pending for this user")
 
     inv = InstituteInvitation(
         institute_id=institute_id,
         invitee_user_id=user_id,
-        invitee_email=normalized_email,
+        invitee_email="",
         role=role,
         status="pending",
         invited_by=invited_by,
     )
     db.add(inv)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as error:
+        db.rollback()
+        raise ValueError("Invitation already pending for this user") from error
     db.refresh(inv)
     _notify_invitation_created(db, inv)
     return inv
@@ -85,14 +75,11 @@ def _notify_invitation_created(db: Session, inv: InstituteInvitation) -> None:
     institute_name = institute.name if institute else "an institute"
     role_label = ROLE_LABELS.get(inv.role, inv.role)
 
-    user_id = inv.invitee_user_id
-    if not user_id and inv.invitee_email:
-        user_id = find_user_id_by_email(inv.invitee_email)
-    if not user_id:
+    if not inv.invitee_user_id:
         return
 
     notify_user(
-        user_id,
+        inv.invitee_user_id,
         type="education.invitation",
         title=f"Invitation to {institute_name}",
         body=f"You were invited as {role_label}. Accept or decline from your inbox.",
@@ -126,12 +113,7 @@ def _on_invitation_accepted(
 
 
 def _invitation_matches_user(inv: InstituteInvitation, user_id: str, email: str) -> bool:
-    normalized = _normalize_email(email)
-    if inv.invitee_user_id and inv.invitee_user_id == user_id:
-        return True
-    if inv.invitee_email and _normalize_email(inv.invitee_email) == normalized:
-        return True
-    return False
+    return bool(inv.invitee_user_id and inv.invitee_user_id == user_id)
 
 
 def list_institute_invitations(db: Session, institute_id: str) -> list[InstituteInvitation]:
@@ -147,16 +129,12 @@ def list_institute_invitations(db: Session, institute_id: str) -> list[Institute
 def list_user_pending_invitations(
     db: Session, user_id: str, email: str
 ) -> list[tuple[InstituteInvitation, Institute]]:
-    normalized = _normalize_email(email)
-    filters = [InstituteInvitation.invitee_user_id == user_id]
-    if normalized:
-        filters.append(func.lower(InstituteInvitation.invitee_email) == normalized)
     rows = db.execute(
         select(InstituteInvitation, Institute)
         .join(Institute, Institute.id == InstituteInvitation.institute_id)
         .where(
             InstituteInvitation.status == "pending",
-            or_(*filters),
+            InstituteInvitation.invitee_user_id == user_id,
         )
         .order_by(InstituteInvitation.created_at.desc())
     )
@@ -167,7 +145,16 @@ def accept_invitation(
     db: Session, invitation_id: str, user_id: str, email: str
 ) -> InstituteMember:
     inv = db.get(InstituteInvitation, invitation_id)
-    if not inv or inv.status != "pending":
+    if not inv:
+        raise ValueError("Invitation not found")
+    if inv.status == "accepted":
+        if inv.invitee_user_id != user_id:
+            raise PermissionError("Not your invitation")
+        existing = get_membership(db, inv.institute_id, user_id)
+        if not existing:
+            raise ValueError("Invitation membership not found")
+        return existing
+    if inv.status != "pending":
         raise ValueError("Invitation not found")
     if not _invitation_matches_user(inv, user_id, email):
         raise PermissionError("Not your invitation")
@@ -179,7 +166,9 @@ def accept_invitation(
         )
     )
     if existing:
-        db.delete(inv)
+        inv.status = "accepted"
+        inv.invitee_user_id = user_id
+        inv.responded_at = datetime.now(timezone.utc)
         db.commit()
         db.refresh(existing)
         return existing
@@ -193,7 +182,20 @@ def accept_invitation(
     inv.status = "accepted"
     inv.invitee_user_id = user_id
     inv.responded_at = datetime.now(timezone.utc)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        existing = get_membership(db, inv.institute_id, user_id)
+        if not existing:
+            raise
+        inv = db.get(InstituteInvitation, invitation_id)
+        if inv and inv.status == "pending":
+            inv.status = "accepted"
+            inv.invitee_user_id = user_id
+            inv.responded_at = datetime.now(timezone.utc)
+            db.commit()
+        return existing
     db.refresh(member)
     _on_invitation_accepted(db, inv, member, user_id, email)
     return member

@@ -65,15 +65,23 @@ def migrate_invitations(engine: Engine) -> None:
         conn.execute(
             text(
                 """
+                ALTER TABLE institute_invitations
+                DROP CONSTRAINT IF EXISTS institute_invitations_institute_id_invitee_email_status_key
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
                 DO $$
                 BEGIN
                   IF NOT EXISTS (
                     SELECT 1 FROM pg_constraint
-                    WHERE conname = 'institute_invitations_institute_id_invitee_email_status_key'
+                    WHERE conname = 'institute_invitations_institute_id_invitee_user_id_status_key'
                   ) THEN
                     ALTER TABLE institute_invitations
-                    ADD CONSTRAINT institute_invitations_institute_id_invitee_email_status_key
-                    UNIQUE (institute_id, invitee_email, status);
+                    ADD CONSTRAINT institute_invitations_institute_id_invitee_user_id_status_key
+                    UNIQUE (institute_id, invitee_user_id, status);
                   END IF;
                 END $$;
                 """
@@ -98,6 +106,35 @@ def migrate_join_requests(engine: Engine) -> None:
                     responded_at TIMESTAMPTZ,
                     UNIQUE (institute_id, user_id, status)
                 )
+                """
+            )
+        )
+
+
+def migrate_subjects(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS subjects (
+                    id VARCHAR(36) PRIMARY KEY,
+                    institute_id VARCHAR(36) NOT NULL REFERENCES institutes(id),
+                    name VARCHAR(200) NOT NULL,
+                    UNIQUE (institute_id, name)
+                );
+                CREATE TABLE IF NOT EXISTS section_subjects (
+                    id VARCHAR(36) PRIMARY KEY,
+                    section_id VARCHAR(36) NOT NULL REFERENCES sections(id),
+                    subject_id VARCHAR(36) NOT NULL REFERENCES subjects(id),
+                    UNIQUE (section_id, subject_id)
+                );
+                CREATE TABLE IF NOT EXISTS teacher_subject_assignments (
+                    id VARCHAR(36) PRIMARY KEY,
+                    section_id VARCHAR(36) NOT NULL REFERENCES sections(id),
+                    subject_id VARCHAR(36) NOT NULL REFERENCES subjects(id),
+                    teacher_id VARCHAR(64) NOT NULL,
+                    UNIQUE (section_id, subject_id, teacher_id)
+                );
                 """
             )
         )

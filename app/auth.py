@@ -1,5 +1,5 @@
 import httpx
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 
@@ -51,7 +51,6 @@ async def _resolve_email(token: str, payload: dict) -> str:
 
 async def get_current_user(
     creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
-    x_user_email: str | None = Header(None, alias="X-User-Email"),
 ) -> dict:
     if not creds:
         raise HTTPException(status_code=401, detail="Missing token")
@@ -70,8 +69,6 @@ async def get_current_user(
         raise HTTPException(status_code=401, detail="Invalid token") from e
 
     email = await _resolve_email(creds.credentials, payload)
-    if x_user_email and "@" in x_user_email:
-        email = _normalize_email(x_user_email)
 
     return {
         "id": payload.get("sub"),

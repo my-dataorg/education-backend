@@ -42,7 +42,7 @@ class InstituteMember(Base):
 
 class InstituteInvitation(Base):
     __tablename__ = "institute_invitations"
-    __table_args__ = (UniqueConstraint("institute_id", "invitee_email", "status"),)
+    __table_args__ = (UniqueConstraint("institute_id", "invitee_user_id", "status"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     institute_id: Mapped[str] = mapped_column(String(36), ForeignKey("institutes.id"))
@@ -88,6 +88,34 @@ class SectionMember(Base):
     section_id: Mapped[str] = mapped_column(String(36), ForeignKey("sections.id"))
     user_id: Mapped[str] = mapped_column(String(64))
     member_type: Mapped[str] = mapped_column(String(16))  # teacher, student
+
+
+class Subject(Base):
+    __tablename__ = "subjects"
+    __table_args__ = (UniqueConstraint("institute_id", "name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    institute_id: Mapped[str] = mapped_column(String(36), ForeignKey("institutes.id"))
+    name: Mapped[str] = mapped_column(String(200))
+
+
+class SectionSubject(Base):
+    __tablename__ = "section_subjects"
+    __table_args__ = (UniqueConstraint("section_id", "subject_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    section_id: Mapped[str] = mapped_column(String(36), ForeignKey("sections.id"))
+    subject_id: Mapped[str] = mapped_column(String(36), ForeignKey("subjects.id"))
+
+
+class TeacherSubjectAssignment(Base):
+    __tablename__ = "teacher_subject_assignments"
+    __table_args__ = (UniqueConstraint("section_id", "subject_id", "teacher_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    section_id: Mapped[str] = mapped_column(String(36), ForeignKey("sections.id"))
+    subject_id: Mapped[str] = mapped_column(String(36), ForeignKey("subjects.id"))
+    teacher_id: Mapped[str] = mapped_column(String(64))
 
 
 class DailyNote(Base):

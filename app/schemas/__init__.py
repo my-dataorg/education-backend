@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class InstituteCreate(BaseModel):
@@ -125,15 +125,8 @@ class InstituteSummaryOut(BaseModel):
 
 
 class InvitationCreate(BaseModel):
-    email: str | None = None
-    userId: str | None = None
-    role: str = Field(pattern="^(admin|principal|teacher|lecturer|professor|student)$")
-
-    @model_validator(mode="after")
-    def require_invitee(self) -> "InvitationCreate":
-        if not self.email and not self.userId:
-            raise ValueError("Email or userId is required")
-        return self
+    userId: str
+    role: str = Field(pattern="^(teacher|student)$")
 
 
 class InvitationOut(BaseModel):
@@ -239,6 +232,41 @@ class AssignMember(BaseModel):
 class SectionMemberAssign(BaseModel):
     userId: str
     memberType: str = Field(pattern="^(teacher|student)$")
+
+
+class SubjectCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+
+    @field_validator("name")
+    @classmethod
+    def require_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Subject name is required")
+        return value
+
+
+class SubjectOut(BaseModel):
+    id: str
+    name: str
+
+
+class SectionSubjectAssign(BaseModel):
+    subjectId: str
+
+
+class TeacherSubjectAssign(BaseModel):
+    userId: str
+
+
+class TeacherSubjectOut(BaseModel):
+    userId: str
+
+
+class SectionSubjectOut(BaseModel):
+    id: str
+    name: str
+    teachers: list[TeacherSubjectOut] = Field(default_factory=list)
 
 
 class SectionEnrollmentOut(BaseModel):

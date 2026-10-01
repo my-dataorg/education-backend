@@ -41,6 +41,13 @@ def require_manage(db: Session, institute_id: str, user_id: str) -> InstituteMem
     return member
 
 
+def require_owner(db: Session, institute_id: str, user_id: str) -> InstituteMember:
+    member = require_membership(db, institute_id, user_id)
+    if member.role != "owner":
+        raise PermissionError("Owner role required")
+    return member
+
+
 def require_directory_view(db: Session, institute_id: str, user_id: str) -> InstituteMember:
     member = require_membership(db, institute_id, user_id)
     if member.role not in VIEW_DIRECTORY_ROLES:
