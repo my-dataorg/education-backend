@@ -1,7 +1,17 @@
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from app.models import Assignment, Branch, DailyNote, Section, SectionMember, Submission
+from app.models import (
+    Assignment,
+    Branch,
+    DailyNote,
+    Section,
+    SectionMember,
+    SectionSubject,
+    Submission,
+    TeacherSubjectAssignment,
+    TimetableEntry,
+)
 from app.roles import MANAGE_ROLES, TEACHER_ROLES
 from app.services.institutes import get_member_profile, get_membership, require_membership
 from app.services.user_identity import enrich_rows
@@ -107,6 +117,28 @@ def assign_section_member(
     db.commit()
     db.refresh(row)
     return row
+
+
+def delete_section(db: Session, institute_id: str, section_id: str) -> None:
+    section = db.scalar(
+        select(Section).where(Section.id == section_id, Section.institute_id == institute_id)
+    )
+    if not section:
+        raise ValueError("Section not found")
+
+    assignment_ids = db.scalars(
+        select(Assignment.id).where(Assignment.section_id == section_id)
+    ).all()
+    for assignment_id in assignment_ids:
+        db.execute(delete(Submission).where(Submission.assignment_id == assignment_id))
+    db.execute(delete(Assignment).where(Assignment.section_id == section_id))
+    db.execute(delete(DailyNote).where(DailyNote.section_id == section_id))
+    db.execute(delete(TimetableEntry).where(TimetableEntry.section_id == section_id))
+    db.execute(delete(TeacherSubjectAssignment).where(TeacherSubjectAssignment.section_id == section_id))
+    db.execute(delete(SectionSubject).where(SectionSubject.section_id == section_id))
+    db.execute(delete(SectionMember).where(SectionMember.section_id == section_id))
+    db.delete(section)
+    db.commit()
 
 
 def remove_section_member(db: Session, section_id: str, user_id: str) -> None:

@@ -97,6 +97,7 @@ from app.services.institutes import (
 )
 from app.services.sections import (
     assign_section_member,
+    delete_section,
     get_section_overview,
     list_member_sections,
     list_my_enrolled_sections,
@@ -789,6 +790,22 @@ def create_section(
     db.commit()
     db.refresh(section)
     return _section_out(db, section)
+
+
+@app.delete("/v1/institutes/{institute_id}/sections/{section_id}", status_code=204)
+def remove_section(
+    institute_id: str,
+    section_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_owner(db, institute_id, user["id"])
+        delete_section(db, institute_id, section_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
 
 @app.get("/v1/institutes/{institute_id}/subjects", response_model=list[SubjectOut])
