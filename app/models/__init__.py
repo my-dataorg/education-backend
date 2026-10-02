@@ -1,8 +1,8 @@
 import secrets
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, time
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, String, Text, Time, UniqueConstraint, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -116,6 +116,43 @@ class TeacherSubjectAssignment(Base):
     section_id: Mapped[str] = mapped_column(String(36), ForeignKey("sections.id"))
     subject_id: Mapped[str] = mapped_column(String(36), ForeignKey("subjects.id"))
     teacher_id: Mapped[str] = mapped_column(String(64))
+
+
+class ScheduleSettings(Base):
+    __tablename__ = "schedule_settings"
+
+    institute_id: Mapped[str] = mapped_column(String(36), ForeignKey("institutes.id"), primary_key=True)
+    timezone: Mapped[str] = mapped_column(String(64), default="Asia/Kolkata")
+    school_start: Mapped[time] = mapped_column(Time, default=time(8, 0))
+    school_end: Mapped[time] = mapped_column(Time, default=time(15, 0))
+    weekdays: Mapped[str] = mapped_column(String(32), default="1,2,3,4,5,6")
+    revision: Mapped[int] = mapped_column(default=1)
+
+
+class ScheduleSlot(Base):
+    __tablename__ = "schedule_slots"
+    __table_args__ = (UniqueConstraint("institute_id", "position"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    institute_id: Mapped[str] = mapped_column(String(36), ForeignKey("institutes.id"))
+    label: Mapped[str] = mapped_column(String(100))
+    kind: Mapped[str] = mapped_column(String(16), default="instruction")
+    start_time: Mapped[time] = mapped_column(Time)
+    end_time: Mapped[time] = mapped_column(Time)
+    position: Mapped[int] = mapped_column()
+
+
+class TimetableEntry(Base):
+    __tablename__ = "timetable_entries"
+    __table_args__ = (UniqueConstraint("slot_id", "day_of_week", "section_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    institute_id: Mapped[str] = mapped_column(String(36), ForeignKey("institutes.id"))
+    slot_id: Mapped[str] = mapped_column(String(36), ForeignKey("schedule_slots.id"))
+    day_of_week: Mapped[int] = mapped_column()
+    section_id: Mapped[str] = mapped_column(String(36), ForeignKey("sections.id"))
+    subject_id: Mapped[str] = mapped_column(String(36), ForeignKey("subjects.id"))
+    teacher_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class DailyNote(Base):

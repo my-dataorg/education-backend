@@ -269,6 +269,80 @@ class SectionSubjectOut(BaseModel):
     teachers: list[TeacherSubjectOut] = Field(default_factory=list)
 
 
+class ScheduleSettingsOut(BaseModel):
+    timezone: str
+    schoolStart: str
+    schoolEnd: str
+    weekdays: list[int]
+
+
+class ScheduleSlotOut(BaseModel):
+    id: str
+    label: str
+    kind: str
+    start: str
+    end: str
+    position: int
+
+
+class TimetableEntryOut(BaseModel):
+    id: str
+    dayOfWeek: int
+    slotId: str
+    sectionId: str
+    subjectId: str
+    teacherId: str | None = None
+
+
+class ScheduleOut(BaseModel):
+    instituteId: str
+    revision: int
+    settings: ScheduleSettingsOut
+    slots: list[ScheduleSlotOut]
+    entries: list[TimetableEntryOut]
+
+
+class ScheduleSettingsIn(BaseModel):
+    timezone: str = "Asia/Kolkata"
+    schoolStart: str = Field(default="08:00", pattern=r"^([01][0-9]|2[0-3]):[0-5][0-9]$")
+    schoolEnd: str = Field(default="15:00", pattern=r"^([01][0-9]|2[0-3]):[0-5][0-9]$")
+    weekdays: list[int] = Field(default_factory=lambda: [1, 2, 3, 4, 5, 6])
+
+    @field_validator("weekdays")
+    @classmethod
+    def validate_weekdays(cls, value: list[int]) -> list[int]:
+        if not value or any(day < 1 or day > 7 for day in value):
+            raise ValueError("Weekdays must contain values from 1 to 7")
+        if len(set(value)) != len(value):
+            raise ValueError("Weekdays must be unique")
+        return sorted(value)
+
+
+class ScheduleSlotIn(BaseModel):
+    id: str | None = None
+    label: str = Field(min_length=1, max_length=100)
+    kind: str = Field(pattern="^(instruction|break)$")
+    start: str
+    end: str
+    position: int = Field(ge=0)
+
+
+class TimetableEntryIn(BaseModel):
+    id: str | None = None
+    dayOfWeek: int = Field(ge=1, le=7)
+    slotId: str
+    sectionId: str
+    subjectId: str
+    teacherId: str | None = None
+
+
+class ScheduleUpdate(BaseModel):
+    revision: int
+    settings: ScheduleSettingsIn
+    slots: list[ScheduleSlotIn]
+    entries: list[TimetableEntryIn]
+
+
 class SectionEnrollmentOut(BaseModel):
     sectionId: str
     sectionName: str

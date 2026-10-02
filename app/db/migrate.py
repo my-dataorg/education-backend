@@ -140,6 +140,44 @@ def migrate_subjects(engine: Engine) -> None:
         )
 
 
+def migrate_schedule(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS schedule_settings (
+                    institute_id VARCHAR(36) PRIMARY KEY REFERENCES institutes(id),
+                    timezone VARCHAR(64) NOT NULL DEFAULT 'Asia/Kolkata',
+                    school_start TIME NOT NULL DEFAULT '08:00',
+                    school_end TIME NOT NULL DEFAULT '15:00',
+                    weekdays VARCHAR(32) NOT NULL DEFAULT '1,2,3,4,5,6',
+                    revision INTEGER NOT NULL DEFAULT 1
+                );
+                CREATE TABLE IF NOT EXISTS schedule_slots (
+                    id VARCHAR(36) PRIMARY KEY,
+                    institute_id VARCHAR(36) NOT NULL REFERENCES institutes(id),
+                    label VARCHAR(100) NOT NULL,
+                    kind VARCHAR(16) NOT NULL DEFAULT 'instruction',
+                    start_time TIME NOT NULL,
+                    end_time TIME NOT NULL,
+                    position INTEGER NOT NULL,
+                    UNIQUE (institute_id, position)
+                );
+                CREATE TABLE IF NOT EXISTS timetable_entries (
+                    id VARCHAR(36) PRIMARY KEY,
+                    institute_id VARCHAR(36) NOT NULL REFERENCES institutes(id),
+                    slot_id VARCHAR(36) NOT NULL REFERENCES schedule_slots(id),
+                    day_of_week INTEGER NOT NULL,
+                    section_id VARCHAR(36) NOT NULL REFERENCES sections(id),
+                    subject_id VARCHAR(36) NOT NULL REFERENCES subjects(id),
+                    teacher_id VARCHAR(64),
+                    UNIQUE (slot_id, day_of_week, section_id)
+                );
+                """
+            )
+        )
+
+
 def seed_default_branches(db: Session) -> None:
     """Give existing institutes a primary branch if they have none."""
     institute_ids = db.scalars(select(Institute.id)).all()

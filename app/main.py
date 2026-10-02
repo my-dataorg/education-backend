@@ -11,6 +11,7 @@ from app.config import settings
 from app.db.migrate import (
     migrate_invitations,
     migrate_join_requests,
+    migrate_schedule,
     migrate_subjects,
     run_migrations,
     seed_default_branches,
@@ -62,6 +63,8 @@ from app.schemas import (
     SectionMemberAssign,
     SectionOut,
     SectionOverviewOut,
+    ScheduleOut,
+    ScheduleUpdate,
     SubjectCreate,
     SubjectOut,
     SubmissionCreate,
@@ -102,6 +105,7 @@ from app.services.sections import (
     require_section_student,
     require_section_teacher,
 )
+from app.services.schedule import get_schedule, replace_schedule
 from app.services.join_requests import (
     accept_join_request,
     create_join_request,
@@ -138,6 +142,7 @@ async def lifespan(_: FastAPI):
     run_migrations(engine)
     migrate_invitations(engine)
     migrate_join_requests(engine)
+    migrate_schedule(engine)
     migrate_subjects(engine)
     with SessionLocal() as db:
         seed_default_branches(db)
@@ -335,7 +340,7 @@ def add_institute_member(
     user: User = Depends(require_education_subscription),
 ):
     try:
-        require_owner(db, institute_id, user["id"])
+        require_manage(db, institute_id, user["id"])
         member = add_member(db, institute_id, body.userId, body.role)
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
@@ -717,13 +722,44 @@ def list_sections(
     user: User = Depends(require_education_subscription),
 ):
     try:
-        require_owner(db, institute_id, user["id"])
+        require_manage(db, institute_id, user["id"])
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     sections = db.scalars(
         select(Section).where(Section.institute_id == institute_id).order_by(Section.name)
     )
     return [_section_out(db, s) for s in sections]
+
+
+@app.get("/v1/institutes/{institute_id}/schedule", response_model=ScheduleOut)
+def read_schedule(
+    institute_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_membership(db, institute_id, user["id"])
+        return get_schedule(db, institute_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+
+
+@app.put("/v1/institutes/{institute_id}/schedule", response_model=ScheduleOut)
+def update_schedule(
+    institute_id: str,
+    body: ScheduleUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_manage(db, institute_id, user["id"])
+        return replace_schedule(db, institute_id, body)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @app.post("/v1/institutes/{institute_id}/sections", response_model=SectionOut, status_code=201)
@@ -762,7 +798,7 @@ def get_subjects(
     user: User = Depends(require_education_subscription),
 ):
     try:
-        require_owner(db, institute_id, user["id"])
+        require_membership(db, institute_id, user["id"])
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     return [SubjectOut(id=s.id, name=s.name) for s in list_subjects(db, institute_id)]
