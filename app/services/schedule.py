@@ -9,8 +9,7 @@ from app.models import (
     ScheduleSlot,
     Section,
     SectionMember,
-    SectionSubject,
-    TeacherSubjectAssignment,
+    Subject,
     TimetableEntry,
 )
 from app.services.institutes import get_membership
@@ -96,19 +95,9 @@ def replace_schedule(db: Session, institute_id: str, body) -> dict:
         section.id: section
         for section in db.scalars(select(Section).where(Section.institute_id == institute_id))
     }
-    section_subjects = {
-        (link.section_id, link.subject_id)
-        for link in db.scalars(
-            select(SectionSubject).where(SectionSubject.section_id.in_(sections))
-        )
-    }
-    valid_teachers = {
-        (assignment.section_id, assignment.subject_id, assignment.teacher_id)
-        for assignment in db.scalars(
-            select(TeacherSubjectAssignment).where(
-                TeacherSubjectAssignment.section_id.in_(sections)
-            )
-        )
+    subjects = {
+        subject.id: subject
+        for subject in db.scalars(select(Subject).where(Subject.institute_id == institute_id))
     }
 
     entries = []
@@ -120,14 +109,10 @@ def replace_schedule(db: Session, institute_id: str, body) -> dict:
             raise ValueError("Entries must use instruction slots")
         if entry_input.dayOfWeek not in body.settings.weekdays:
             raise ValueError("Entry day is not enabled for this schedule")
-        if (entry_input.sectionId, entry_input.subjectId) not in section_subjects:
-            raise ValueError("Subject is not linked to this section")
-        if entry_input.teacherId and (
-            entry_input.sectionId,
-            entry_input.subjectId,
-            entry_input.teacherId,
-        ) not in valid_teachers:
-            raise ValueError("Teacher is not assigned to this section subject")
+        if entry_input.sectionId not in sections:
+            raise ValueError("Section does not belong to this institute")
+        if entry_input.subjectId not in subjects:
+            raise ValueError("Subject does not belong to this institute")
         entry_key = (entry_input.dayOfWeek, entry_input.slotId, entry_input.sectionId)
         if entry_key in entry_keys:
             raise ValueError("A section can only have one entry in each period")
@@ -171,14 +156,11 @@ def _check_conflicts(entries: list[TimetableEntry], slots: list[ScheduleSlot]) -
                 continue
             other_slot = slot_by_id[other.slot_id]
             same_section = other.section_id == entry.section_id
-            same_teacher = entry.teacher_id and other.teacher_id == entry.teacher_id
-            if (same_section or same_teacher) and (
+            if same_section and (
                 current.start_time < other_slot.end_time
                 and other_slot.start_time < current.end_time
             ):
-                if same_section:
-                    raise ValueError("A section cannot have overlapping periods")
-                raise ValueError("A teacher cannot be assigned to overlapping periods")
+                raise ValueError("A section cannot have overlapping periods")
 
 
 def _output(settings: ScheduleSettings, slots: list[ScheduleSlot], entries: list[TimetableEntry]) -> dict:

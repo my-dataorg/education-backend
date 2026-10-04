@@ -16,7 +16,9 @@ from app.models import (
     SectionSubject,
     TeacherSubjectAssignment,
 )
+from app.schemas import ScheduleUpdate
 from app.services import invitations, subjects
+from app.services.schedule import replace_schedule
 
 
 @pytest.fixture
@@ -160,3 +162,45 @@ def test_non_member_cannot_access_institute(db: Session, client: TestClient):
     response = client.get(f"/v1/institutes/{institute.id}")
 
     assert response.status_code == 403
+
+
+def test_schedule_assigns_institute_subject_without_enrollment_link(db: Session):
+    institute = add_institute(db)
+    section = Section(id="section-1", institute_id=institute.id, name="A", class_name="1")
+    subject = subjects.create_subject(db, institute.id, "Mathematics")
+    db.add(section)
+    db.commit()
+
+    body = ScheduleUpdate(
+        revision=1,
+        settings={
+            "timezone": "Asia/Kolkata",
+            "schoolStart": "08:00",
+            "schoolEnd": "15:00",
+            "weekdays": [1],
+        },
+        slots=[
+            {
+                "id": "slot-1",
+                "label": "Mathematics",
+                "kind": "instruction",
+                "start": "08:00",
+                "end": "08:45",
+                "position": 0,
+            }
+        ],
+        entries=[
+            {
+                "id": "entry-1",
+                "dayOfWeek": 1,
+                "slotId": "slot-1",
+                "sectionId": section.id,
+                "subjectId": subject.id,
+            }
+        ],
+    )
+
+    result = replace_schedule(db, institute.id, body)
+
+    assert result["entries"][0]["subjectId"] == subject.id
+    assert result["entries"][0]["teacherId"] is None
