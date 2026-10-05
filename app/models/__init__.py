@@ -140,6 +140,7 @@ class ScheduleSlot(Base):
     start_time: Mapped[time] = mapped_column(Time)
     end_time: Mapped[time] = mapped_column(Time)
     position: Mapped[int] = mapped_column()
+    day_of_week: Mapped[int | None] = mapped_column(nullable=True)
 
 
 class TimetableEntry(Base):

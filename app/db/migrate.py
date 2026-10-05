@@ -161,6 +161,7 @@ def migrate_schedule(engine: Engine) -> None:
                     start_time TIME NOT NULL,
                     end_time TIME NOT NULL,
                     position INTEGER NOT NULL,
+                    day_of_week INTEGER,
                     UNIQUE (institute_id, position)
                 );
                 CREATE TABLE IF NOT EXISTS timetable_entries (
@@ -173,6 +174,14 @@ def migrate_schedule(engine: Engine) -> None:
                     teacher_id VARCHAR(64),
                     UNIQUE (slot_id, day_of_week, section_id)
                 );
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                ALTER TABLE schedule_slots
+                ADD COLUMN IF NOT EXISTS day_of_week INTEGER
                 """
             )
         )

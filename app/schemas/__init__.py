@@ -283,6 +283,7 @@ class ScheduleSlotOut(BaseModel):
     start: str
     end: str
     position: int
+    dayOfWeek: int | None = None
 
 
 class TimetableEntryOut(BaseModel):
@@ -325,6 +326,7 @@ class ScheduleSlotIn(BaseModel):
     start: str
     end: str
     position: int = Field(ge=0)
+    dayOfWeek: int | None = Field(default=None, ge=1, le=7)
 
 
 class TimetableEntryIn(BaseModel):
