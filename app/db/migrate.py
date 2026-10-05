@@ -135,6 +135,13 @@ def migrate_subjects(engine: Engine) -> None:
                     teacher_id VARCHAR(64) NOT NULL,
                     UNIQUE (section_id, subject_id, teacher_id)
                 );
+                CREATE TABLE IF NOT EXISTS section_subject_student_assignments (
+                    id VARCHAR(36) PRIMARY KEY,
+                    section_id VARCHAR(36) NOT NULL REFERENCES sections(id),
+                    subject_id VARCHAR(36) NOT NULL REFERENCES subjects(id),
+                    student_id VARCHAR(64) NOT NULL,
+                    UNIQUE (section_id, subject_id, student_id)
+                );
                 """
             )
         )

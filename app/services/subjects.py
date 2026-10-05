@@ -7,6 +7,7 @@ from app.models import (
     Section,
     SectionMember,
     SectionSubject,
+    SectionSubjectStudentAssignment,
     Subject,
     TeacherSubjectAssignment,
 )
@@ -45,6 +46,11 @@ def delete_subject(db: Session, institute_id: str, subject_id: str) -> None:
     if not subject:
         raise ValueError("Subject not found")
     db.execute(delete(TeacherSubjectAssignment).where(TeacherSubjectAssignment.subject_id == subject_id))
+    db.execute(
+        delete(SectionSubjectStudentAssignment).where(
+            SectionSubjectStudentAssignment.subject_id == subject_id
+        )
+    )
     db.execute(delete(SectionSubject).where(SectionSubject.subject_id == subject_id))
     db.delete(subject)
     db.commit()
@@ -72,7 +78,18 @@ def list_section_subjects(db: Session, section_id: str) -> list[dict]:
                 TeacherSubjectAssignment.subject_id == subject.id,
             )
         )
-        result.append({"id": subject.id, "name": subject.name, "teachers": list(teachers)})
+        students = db.scalars(
+            select(SectionSubjectStudentAssignment.student_id).where(
+                SectionSubjectStudentAssignment.section_id == section_id,
+                SectionSubjectStudentAssignment.subject_id == subject.id,
+            )
+        )
+        result.append({
+            "id": subject.id,
+            "name": subject.name,
+            "teachers": list(teachers),
+            "students": list(students),
+        })
     return result
 
 
@@ -105,6 +122,12 @@ def unlink_subject(db: Session, section_id: str, subject_id: str) -> None:
         delete(TeacherSubjectAssignment).where(
             TeacherSubjectAssignment.section_id == section_id,
             TeacherSubjectAssignment.subject_id == subject_id,
+        )
+    )
+    db.execute(
+        delete(SectionSubjectStudentAssignment).where(
+            SectionSubjectStudentAssignment.section_id == section_id,
+            SectionSubjectStudentAssignment.subject_id == subject_id,
         )
     )
     db.commit()
@@ -152,6 +175,53 @@ def unassign_teacher(db: Session, section_id: str, subject_id: str, teacher_id: 
             TeacherSubjectAssignment.section_id == section_id,
             TeacherSubjectAssignment.subject_id == subject_id,
             TeacherSubjectAssignment.teacher_id == teacher_id,
+        )
+    )
+    db.commit()
+
+
+def assign_student(db: Session, section_id: str, subject_id: str, student_id: str) -> None:
+    section = get_section(db, section_id)
+    linked = db.scalar(
+        select(SectionSubject).where(
+            SectionSubject.section_id == section_id,
+            SectionSubject.subject_id == subject_id,
+        )
+    )
+    student = db.scalar(
+        select(SectionMember).where(
+            SectionMember.section_id == section_id,
+            SectionMember.user_id == student_id,
+            SectionMember.member_type == "student",
+        )
+    )
+    membership = get_membership(db, section.institute_id, student_id)
+    if not linked or not student or not membership or membership.role != "student":
+        raise ValueError("Student or subject is not assigned to this section")
+    existing = db.scalar(
+        select(SectionSubjectStudentAssignment).where(
+            SectionSubjectStudentAssignment.section_id == section_id,
+            SectionSubjectStudentAssignment.subject_id == subject_id,
+            SectionSubjectStudentAssignment.student_id == student_id,
+        )
+    )
+    if not existing:
+        db.add(
+            SectionSubjectStudentAssignment(
+                section_id=section_id,
+                subject_id=subject_id,
+                student_id=student_id,
+            )
+        )
+        db.commit()
+
+
+def unassign_student(db: Session, section_id: str, subject_id: str, student_id: str) -> None:
+    db.execute(
+        delete(SectionSubjectStudentAssignment).where(
+            SectionSubjectStudentAssignment.section_id == section_id,
+            SectionSubjectStudentAssignment.subject_id == subject_id,
+            SectionSubjectStudentAssignment.student_id == student_id,
         )
     )
     db.commit()

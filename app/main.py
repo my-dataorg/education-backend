@@ -75,6 +75,8 @@ from app.schemas import (
     TeacherAbsenceOut,
     SubjectCreate,
     SubjectOut,
+    StudentSubjectAssign,
+    StudentSubjectOut,
     SubmissionCreate,
     SubmissionOut,
     TeacherSubjectAssign,
@@ -142,6 +144,7 @@ from app.services.invitations import (
 from app.services.platform_users import search_users
 from app.services.subjects import (
     assign_teacher as assign_subject_teacher,
+    assign_student as assign_subject_student,
     create_subject,
     delete_subject,
     link_subject,
@@ -149,6 +152,7 @@ from app.services.subjects import (
     list_subjects,
     unlink_subject,
     unassign_teacher,
+    unassign_student as unassign_subject_student,
 )
 from app.services.user_identity import enrich_rows, identity_for_user
 
@@ -1010,6 +1014,7 @@ def get_section_subjects(
             id=row["id"],
             name=row["name"],
             teachers=[TeacherSubjectOut(userId=user_id) for user_id in row["teachers"]],
+            students=[StudentSubjectOut(userId=user_id) for user_id in row["students"]],
         )
         for row in list_section_subjects(db, section_id)
     ]
@@ -1100,6 +1105,54 @@ def remove_subject_teacher(
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@app.post(
+    "/v1/sections/{section_id}/subjects/{subject_id}/students",
+    response_model=StudentSubjectOut,
+    status_code=201,
+)
+def add_subject_student(
+    section_id: str,
+    subject_id: str,
+    body: StudentSubjectAssign,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        section = db.get(Section, section_id)
+        if not section:
+            raise ValueError("Section not found")
+        require_owner(db, section.institute_id, user["id"])
+        assign_subject_student(db, section_id, subject_id, body.userId)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return StudentSubjectOut(userId=body.userId)
+
+
+@app.delete(
+    "/v1/sections/{section_id}/subjects/{subject_id}/students/{student_id}",
+    status_code=204,
+)
+def remove_subject_student(
+    section_id: str,
+    subject_id: str,
+    student_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        section = db.get(Section, section_id)
+        if not section:
+            raise ValueError("Section not found")
+        require_owner(db, section.institute_id, user["id"])
+        unassign_subject_student(db, section_id, subject_id, student_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @app.get(

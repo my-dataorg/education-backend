@@ -280,10 +280,19 @@ class TeacherSubjectOut(BaseModel):
     userId: str
 
 
+class StudentSubjectAssign(BaseModel):
+    userId: str
+
+
+class StudentSubjectOut(BaseModel):
+    userId: str
+
+
 class SectionSubjectOut(BaseModel):
     id: str
     name: str
     teachers: list[TeacherSubjectOut] = Field(default_factory=list)
+    students: list[StudentSubjectOut] = Field(default_factory=list)
 
 
 class ScheduleSettingsOut(BaseModel):

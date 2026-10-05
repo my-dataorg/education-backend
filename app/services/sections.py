@@ -8,6 +8,7 @@ from app.models import (
     Section,
     SectionMember,
     SectionSubject,
+    SectionSubjectStudentAssignment,
     Submission,
     TeacherSubjectAssignment,
     TimetableEntry,
@@ -135,6 +136,11 @@ def delete_section(db: Session, institute_id: str, section_id: str) -> None:
     db.execute(delete(DailyNote).where(DailyNote.section_id == section_id))
     db.execute(delete(TimetableEntry).where(TimetableEntry.section_id == section_id))
     db.execute(delete(TeacherSubjectAssignment).where(TeacherSubjectAssignment.section_id == section_id))
+    db.execute(
+        delete(SectionSubjectStudentAssignment).where(
+            SectionSubjectStudentAssignment.section_id == section_id
+        )
+    )
     db.execute(delete(SectionSubject).where(SectionSubject.section_id == section_id))
     db.execute(delete(SectionMember).where(SectionMember.section_id == section_id))
     db.delete(section)

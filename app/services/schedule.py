@@ -10,6 +10,7 @@ from app.models import (
     ScheduleSlot,
     Section,
     SectionMember,
+    SectionSubject,
     Subject,
     TimetableEntry,
 )
@@ -120,6 +121,14 @@ def replace_schedule(db: Session, institute_id: str, body) -> dict:
         subject.id: subject
         for subject in db.scalars(select(Subject).where(Subject.institute_id == institute_id))
     }
+    section_subjects = {
+        (link.section_id, link.subject_id)
+        for link in db.scalars(
+            select(SectionSubject).where(
+                SectionSubject.section_id.in_(sections.keys())
+            )
+        )
+    }
 
     entries = []
     entry_keys = set()
@@ -134,6 +143,8 @@ def replace_schedule(db: Session, institute_id: str, body) -> dict:
             raise ValueError("Section does not belong to this institute")
         if entry_input.subjectId not in subjects:
             raise ValueError("Subject does not belong to this institute")
+        if (entry_input.sectionId, entry_input.subjectId) not in section_subjects:
+            raise ValueError("Subject is not assigned to this section")
         entry_key = (entry_input.dayOfWeek, entry_input.slotId, entry_input.sectionId)
         if entry_key in entry_keys:
             raise ValueError("A section can only have one entry in each period")

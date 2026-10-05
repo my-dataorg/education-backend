@@ -15,6 +15,7 @@ from app.models import (
     Section,
     SectionMember,
     SectionSubject,
+    SectionSubjectStudentAssignment,
     Submission,
     TeacherSubjectAssignment,
     TimetableEntry,
@@ -493,6 +494,11 @@ def delete_institute(db: Session, institute_id: str, user_id: str) -> None:
     db.execute(
         delete(TeacherSubjectAssignment).where(
             TeacherSubjectAssignment.section_id.in_([section.id for section in sections])
+        )
+    )
+    db.execute(
+        delete(SectionSubjectStudentAssignment).where(
+            SectionSubjectStudentAssignment.section_id.in_([section.id for section in sections])
         )
     )
     db.execute(

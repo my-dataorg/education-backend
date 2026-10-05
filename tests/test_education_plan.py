@@ -164,12 +164,13 @@ def test_non_member_cannot_access_institute(db: Session, client: TestClient):
     assert response.status_code == 403
 
 
-def test_schedule_assigns_institute_subject_without_enrollment_link(db: Session):
+def test_schedule_requires_subject_enrollment_link(db: Session):
     institute = add_institute(db)
     section = Section(id="section-1", institute_id=institute.id, name="A", class_name="1")
-    subject = subjects.create_subject(db, institute.id, "Mathematics")
     db.add(section)
     db.commit()
+    subject = subjects.create_subject(db, institute.id, "Mathematics")
+    subjects.link_subject(db, section.id, subject.id)
 
     body = ScheduleUpdate(
         revision=1,
