@@ -13,7 +13,7 @@ from app.models import (
     TeacherSubjectAssignment,
     TimetableEntry,
 )
-from app.roles import MANAGE_ROLES, TEACHING_STAFF_ROLES
+from app.roles import MANAGE_ROLES, TEACHER_ROLES, TEACHING_STAFF_ROLES
 from app.services.institutes import get_member_profile, get_membership, require_membership
 from app.services.user_identity import enrich_rows
 
