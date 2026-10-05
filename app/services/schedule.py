@@ -72,7 +72,11 @@ def replace_schedule(db: Session, institute_id: str, body) -> dict:
         slot_end = _parse_time(slot_input.end)
         if slot_start >= slot_end or slot_start < start or slot_end > end:
             raise ValueError("Every schedule slot must fit within school hours")
-        if slot_input.kind == "break" and slot_input.dayOfWeek not in body.settings.weekdays:
+        if (
+            slot_input.kind == "break"
+            and slot_input.dayOfWeek is not None
+            and slot_input.dayOfWeek not in body.settings.weekdays
+        ):
             raise ValueError("Break day must be enabled for this schedule")
         if slot_input.position in positions:
             raise ValueError("Schedule slot positions must be unique")
