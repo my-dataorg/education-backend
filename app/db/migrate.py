@@ -2,7 +2,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
-from app.models import Branch, Institute
+from app.models import Activity, Branch, Institute
 
 
 def run_migrations(engine: Engine) -> None:
@@ -140,6 +140,23 @@ def migrate_subjects(engine: Engine) -> None:
         )
 
 
+def migrate_activities(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS activities (
+                    id VARCHAR(36) PRIMARY KEY,
+                    institute_id VARCHAR(36) NOT NULL REFERENCES institutes(id),
+                    name VARCHAR(100) NOT NULL,
+                    is_system BOOLEAN NOT NULL DEFAULT FALSE,
+                    UNIQUE (institute_id, name)
+                );
+                """
+            )
+        )
+
+
 def migrate_schedule(engine: Engine) -> None:
     with engine.begin() as conn:
         conn.execute(
@@ -185,6 +202,32 @@ def migrate_schedule(engine: Engine) -> None:
                 """
             )
         )
+        conn.execute(
+            text(
+                """
+                ALTER TABLE schedule_slots
+                ADD COLUMN IF NOT EXISTS activity_id VARCHAR(36)
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                DO $$
+                BEGIN
+                  IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint WHERE conname = 'schedule_slots_activity_id_fkey'
+                  ) THEN
+                    ALTER TABLE schedule_slots
+                    ADD CONSTRAINT schedule_slots_activity_id_fkey
+                    FOREIGN KEY (activity_id) REFERENCES activities(id);
+                  END IF;
+                EXCEPTION
+                  WHEN undefined_table THEN NULL;
+                END $$;
+                """
+            )
+        )
 
 
 def seed_default_branches(db: Session) -> None:
@@ -206,5 +249,23 @@ def seed_default_branches(db: Session) -> None:
                 )
             )
             added = True
+    if added:
+        db.commit()
+
+
+def seed_default_activities(db: Session) -> None:
+    """Create the standard non-subject schedule activities for every institute."""
+    institute_ids = db.scalars(select(Institute.id)).all()
+    added = False
+    for institute_id in institute_ids:
+        existing = set(
+            db.scalars(
+                select(Activity.name).where(Activity.institute_id == institute_id)
+            )
+        )
+        for name in ("Break", "Play time", "Lunch time"):
+            if name not in existing:
+                db.add(Activity(institute_id=institute_id, name=name, is_system=True))
+                added = True
     if added:
         db.commit()

@@ -10,15 +10,18 @@ from app.auth import get_current_user, require_education_subscription
 from app.config import settings
 from app.db.migrate import (
     migrate_invitations,
+    migrate_activities,
     migrate_join_requests,
     migrate_schedule,
     migrate_subjects,
     run_migrations,
+    seed_default_activities,
     seed_default_branches,
 )
 from app.db.session import SessionLocal, engine, get_db
 from app.models import (
     Assignment,
+    Activity,
     Base,
     Branch,
     DailyNote,
@@ -32,6 +35,8 @@ from app.models import (
 )
 from app.schemas import (
     AssignMember,
+    ActivityCreate,
+    ActivityOut,
     AssignmentCreate,
     AssignmentOut,
     BranchCreate,
@@ -107,6 +112,11 @@ from app.services.sections import (
     require_section_teacher,
 )
 from app.services.schedule import get_schedule, replace_schedule
+from app.services.activities import (
+    create_activity,
+    delete_activity,
+    list_activities,
+)
 from app.services.join_requests import (
     accept_join_request,
     create_join_request,
@@ -143,10 +153,12 @@ async def lifespan(_: FastAPI):
     run_migrations(engine)
     migrate_invitations(engine)
     migrate_join_requests(engine)
-    migrate_schedule(engine)
     migrate_subjects(engine)
+    migrate_activities(engine)
+    migrate_schedule(engine)
     with SessionLocal() as db:
         seed_default_branches(db)
+        seed_default_activities(db)
     yield
 
 
@@ -852,6 +864,55 @@ def remove_subject(
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@app.get("/v1/institutes/{institute_id}/activities", response_model=list[ActivityOut])
+def get_activities(
+    institute_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_membership(db, institute_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    return [
+        ActivityOut(id=activity.id, name=activity.name)
+        for activity in list_activities(db, institute_id)
+    ]
+
+
+@app.post("/v1/institutes/{institute_id}/activities", response_model=ActivityOut, status_code=201)
+def add_activity(
+    institute_id: str,
+    body: ActivityCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_owner(db, institute_id, user["id"])
+        activity = create_activity(db, institute_id, body.name)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    return ActivityOut(id=activity.id, name=activity.name)
+
+
+@app.delete("/v1/institutes/{institute_id}/activities/{activity_id}", status_code=204)
+def remove_activity(
+    institute_id: str,
+    activity_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_owner(db, institute_id, user["id"])
+        delete_activity(db, institute_id, activity_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=409 if "used" in str(e) or "Default" in str(e) else 404, detail=str(e)) from e
 
 
 @app.get("/v1/sections/{section_id}/subjects", response_model=list[SectionSubjectOut])

@@ -5,6 +5,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models import (
+    Activity,
     ScheduleSettings,
     ScheduleSlot,
     Section,
@@ -73,11 +74,19 @@ def replace_schedule(db: Session, institute_id: str, body) -> dict:
         if slot_start >= slot_end or slot_start < start or slot_end > end:
             raise ValueError("Every schedule slot must fit within school hours")
         if (
-            slot_input.kind == "break"
+            slot_input.kind in {"break", "activity"}
             and slot_input.dayOfWeek is not None
             and slot_input.dayOfWeek not in body.settings.weekdays
         ):
             raise ValueError("Break day must be enabled for this schedule")
+        if slot_input.kind == "activity":
+            if not slot_input.activityId:
+                raise ValueError("Activity slots require an activity")
+            activity = db.get(Activity, slot_input.activityId)
+            if not activity or activity.institute_id != institute_id:
+                raise ValueError("Activity does not belong to this institute")
+        elif slot_input.activityId:
+            raise ValueError("Only activity slots can reference an activity")
         if slot_input.position in positions:
             raise ValueError("Schedule slot positions must be unique")
         positions.add(slot_input.position)
@@ -94,7 +103,12 @@ def replace_schedule(db: Session, institute_id: str, body) -> dict:
                 start_time=slot_start,
                 end_time=slot_end,
                 position=slot_input.position,
-                day_of_week=slot_input.dayOfWeek if slot_input.kind == "break" else None,
+                day_of_week=(
+                    slot_input.dayOfWeek
+                    if slot_input.kind in {"break", "activity"}
+                    else None
+                ),
+                activity_id=slot_input.activityId,
             )
         )
 
@@ -189,6 +203,7 @@ def _output(settings: ScheduleSettings, slots: list[ScheduleSlot], entries: list
                 "end": slot.end_time.strftime("%H:%M"),
                 "position": slot.position,
                 "dayOfWeek": slot.day_of_week,
+                "activityId": slot.activity_id,
             }
             for slot in slots
         ],

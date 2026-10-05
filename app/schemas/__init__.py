@@ -251,6 +251,23 @@ class SubjectOut(BaseModel):
     name: str
 
 
+class ActivityCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+
+    @field_validator("name")
+    @classmethod
+    def require_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Activity name is required")
+        return value
+
+
+class ActivityOut(BaseModel):
+    id: str
+    name: str
+
+
 class SectionSubjectAssign(BaseModel):
     subjectId: str
 
@@ -284,6 +301,7 @@ class ScheduleSlotOut(BaseModel):
     end: str
     position: int
     dayOfWeek: int | None = None
+    activityId: str | None = None
 
 
 class TimetableEntryOut(BaseModel):
@@ -322,11 +340,12 @@ class ScheduleSettingsIn(BaseModel):
 class ScheduleSlotIn(BaseModel):
     id: str | None = None
     label: str = Field(min_length=1, max_length=100)
-    kind: str = Field(pattern="^(instruction|break)$")
+    kind: str = Field(pattern="^(instruction|activity|break)$")
     start: str
     end: str
     position: int = Field(ge=0)
     dayOfWeek: int | None = Field(default=None, ge=1, le=7)
+    activityId: str | None = None
 
 
 class TimetableEntryIn(BaseModel):
