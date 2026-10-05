@@ -13,7 +13,7 @@ from app.models import (
     TeacherSubjectAssignment,
     TimetableEntry,
 )
-from app.roles import MANAGE_ROLES, TEACHER_ROLES
+from app.roles import MANAGE_ROLES, TEACHING_STAFF_ROLES
 from app.services.institutes import get_member_profile, get_membership, require_membership
 from app.services.user_identity import enrich_rows
 
@@ -98,7 +98,7 @@ def assign_section_member(
     if not institute_member:
         raise ValueError("User is not an institute member")
 
-    if member_type == "teacher" and institute_member.role not in TEACHER_ROLES:
+    if member_type == "teacher" and institute_member.role not in TEACHING_STAFF_ROLES:
         raise ValueError("User must be teaching staff")
     if member_type == "student" and institute_member.role != "student":
         raise ValueError("User must be a student")
@@ -112,6 +112,28 @@ def assign_section_member(
     )
     if existing:
         return existing
+
+    if member_type == "student":
+        old_memberships = list(
+            db.scalars(
+                select(SectionMember)
+                .join(Section, Section.id == SectionMember.section_id)
+                .where(
+                    Section.institute_id == section.institute_id,
+                    SectionMember.user_id == user_id,
+                    SectionMember.member_type == "student",
+                    SectionMember.section_id != section_id,
+                )
+            )
+        )
+        for old_membership in old_memberships:
+            db.execute(
+                delete(SectionSubjectStudentAssignment).where(
+                    SectionSubjectStudentAssignment.section_id == old_membership.section_id,
+                    SectionSubjectStudentAssignment.student_id == user_id,
+                )
+            )
+            db.delete(old_membership)
 
     row = SectionMember(section_id=section_id, user_id=user_id, member_type=member_type)
     db.add(row)
@@ -148,6 +170,12 @@ def delete_section(db: Session, institute_id: str, section_id: str) -> None:
 
 
 def remove_section_member(db: Session, section_id: str, user_id: str) -> None:
+    db.execute(
+        delete(SectionSubjectStudentAssignment).where(
+            SectionSubjectStudentAssignment.section_id == section_id,
+            SectionSubjectStudentAssignment.student_id == user_id,
+        )
+    )
     db.execute(
         delete(SectionMember).where(
             SectionMember.section_id == section_id,

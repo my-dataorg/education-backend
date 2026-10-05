@@ -748,7 +748,7 @@ def list_sections(
     user: User = Depends(require_education_subscription),
 ):
     try:
-        require_manage(db, institute_id, user["id"])
+        require_directory_view(db, institute_id, user["id"])
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     sections = db.scalars(
@@ -1217,7 +1217,7 @@ def assign_section_member_route(
     if not section:
         raise HTTPException(status_code=404, detail="Section not found")
     try:
-        require_owner(db, section.institute_id, user["id"])
+        require_manage(db, section.institute_id, user["id"])
         row = assign_section_member(db, section_id, body.userId, body.memberType)
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
@@ -1237,7 +1237,7 @@ def unassign_section_member(
     if not section:
         raise HTTPException(status_code=404, detail="Section not found")
     try:
-        require_owner(db, section.institute_id, user["id"])
+        require_manage(db, section.institute_id, user["id"])
         remove_section_member(db, section_id, member_user_id)
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
