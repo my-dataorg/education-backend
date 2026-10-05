@@ -167,6 +167,18 @@ class TimetableEntry(Base):
     teacher_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
+class TeacherAbsence(Base):
+    __tablename__ = "teacher_absences"
+    __table_args__ = (UniqueConstraint("institute_id", "teacher_id", "absence_date"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    institute_id: Mapped[str] = mapped_column(String(36), ForeignKey("institutes.id"))
+    teacher_id: Mapped[str] = mapped_column(String(64))
+    absence_date: Mapped[date] = mapped_column(Date)
+    substitute_teacher_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    note: Mapped[str] = mapped_column(String(500), default="")
+
+
 class DailyNote(Base):
     __tablename__ = "daily_notes"
 

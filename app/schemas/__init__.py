@@ -364,6 +364,21 @@ class ScheduleUpdate(BaseModel):
     entries: list[TimetableEntryIn]
 
 
+class TeacherAbsenceCreate(BaseModel):
+    teacherId: str
+    absenceDate: date
+    substituteTeacherId: str | None = None
+    note: str = Field(default="", max_length=500)
+
+
+class TeacherAbsenceOut(BaseModel):
+    id: str
+    teacherId: str
+    absenceDate: date
+    substituteTeacherId: str | None = None
+    note: str
+
+
 class SectionEnrollmentOut(BaseModel):
     sectionId: str
     sectionName: str

@@ -230,6 +230,25 @@ def migrate_schedule(engine: Engine) -> None:
         )
 
 
+def migrate_teacher_absences(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS teacher_absences (
+                    id VARCHAR(36) PRIMARY KEY,
+                    institute_id VARCHAR(36) NOT NULL REFERENCES institutes(id),
+                    teacher_id VARCHAR(64) NOT NULL,
+                    absence_date DATE NOT NULL,
+                    substitute_teacher_id VARCHAR(64),
+                    note VARCHAR(500) NOT NULL DEFAULT '',
+                    UNIQUE (institute_id, teacher_id, absence_date)
+                )
+                """
+            )
+        )
+
+
 def seed_default_branches(db: Session) -> None:
     """Give existing institutes a primary branch if they have none."""
     institute_ids = db.scalars(select(Institute.id)).all()

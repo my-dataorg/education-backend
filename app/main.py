@@ -13,6 +13,7 @@ from app.db.migrate import (
     migrate_activities,
     migrate_join_requests,
     migrate_schedule,
+    migrate_teacher_absences,
     migrate_subjects,
     run_migrations,
     seed_default_activities,
@@ -70,6 +71,8 @@ from app.schemas import (
     SectionOverviewOut,
     ScheduleOut,
     ScheduleUpdate,
+    TeacherAbsenceCreate,
+    TeacherAbsenceOut,
     SubjectCreate,
     SubjectOut,
     SubmissionCreate,
@@ -112,6 +115,11 @@ from app.services.sections import (
     require_section_teacher,
 )
 from app.services.schedule import get_schedule, replace_schedule
+from app.services.teacher_coverage import (
+    list_absences,
+    remove_absence,
+    save_absence,
+)
 from app.services.activities import (
     create_activity,
     delete_activity,
@@ -156,6 +164,7 @@ async def lifespan(_: FastAPI):
     migrate_subjects(engine)
     migrate_activities(engine)
     migrate_schedule(engine)
+    migrate_teacher_absences(engine)
     with SessionLocal() as db:
         seed_default_branches(db)
         seed_default_activities(db)
@@ -773,6 +782,74 @@ def update_schedule(
         raise HTTPException(status_code=409, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.get(
+    "/v1/institutes/{institute_id}/teacher-absences",
+    response_model=list[TeacherAbsenceOut],
+)
+def get_teacher_absences(
+    institute_id: str,
+    absence_date: date | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_manage(db, institute_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    return [
+        TeacherAbsenceOut(
+            id=item.id,
+            teacherId=item.teacher_id,
+            absenceDate=item.absence_date,
+            substituteTeacherId=item.substitute_teacher_id,
+            note=item.note,
+        )
+        for item in list_absences(db, institute_id, absence_date or date.today())
+    ]
+
+
+@app.put(
+    "/v1/institutes/{institute_id}/teacher-absences",
+    response_model=TeacherAbsenceOut,
+)
+def update_teacher_absence(
+    institute_id: str,
+    body: TeacherAbsenceCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_manage(db, institute_id, user["id"])
+        item = save_absence(db, institute_id, body)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return TeacherAbsenceOut(
+        id=item.id,
+        teacherId=item.teacher_id,
+        absenceDate=item.absence_date,
+        substituteTeacherId=item.substitute_teacher_id,
+        note=item.note,
+    )
+
+
+@app.delete("/v1/institutes/{institute_id}/teacher-absences/{absence_id}", status_code=204)
+def delete_teacher_absence(
+    institute_id: str,
+    absence_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_manage(db, institute_id, user["id"])
+        remove_absence(db, institute_id, absence_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
 
 @app.post("/v1/institutes/{institute_id}/sections", response_model=SectionOut, status_code=201)
