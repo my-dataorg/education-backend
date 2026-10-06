@@ -206,8 +206,21 @@ class Assignment(Base):
     section_id: Mapped[str] = mapped_column(String(36), ForeignKey("sections.id"))
     title: Mapped[str] = mapped_column(String(200))
     description: Mapped[str] = mapped_column(Text, default="")
+    assignment_type: Mapped[str] = mapped_column(String(16), default="assignment")
     due_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     created_by: Mapped[str] = mapped_column(String(64))
+
+
+class AttendanceRecord(Base):
+    __tablename__ = "attendance_records"
+    __table_args__ = (UniqueConstraint("section_id", "student_id", "attendance_date"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    section_id: Mapped[str] = mapped_column(String(36), ForeignKey("sections.id"))
+    student_id: Mapped[str] = mapped_column(String(64))
+    attendance_date: Mapped[date] = mapped_column(Date)
+    status: Mapped[str] = mapped_column(String(16))
+    marked_by: Mapped[str] = mapped_column(String(64))
 
 
 class Submission(Base):

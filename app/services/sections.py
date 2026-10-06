@@ -277,6 +277,7 @@ def get_section_overview(db: Session, section_id: str, user_id: str) -> dict:
                 "id": assignment.id,
                 "title": assignment.title,
                 "description": assignment.description,
+                "assignmentType": assignment.assignment_type,
                 "dueDate": assignment.due_date.isoformat() if assignment.due_date else None,
                 "submittedCount": submitted,
                 "enrolledStudents": enrolled_students,

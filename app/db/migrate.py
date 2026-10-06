@@ -256,6 +256,33 @@ def migrate_teacher_absences(engine: Engine) -> None:
         )
 
 
+def migrate_teacher_workspace(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                ALTER TABLE assignments
+                ADD COLUMN IF NOT EXISTS assignment_type VARCHAR(16) NOT NULL DEFAULT 'assignment'
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS attendance_records (
+                    id VARCHAR(36) PRIMARY KEY,
+                    section_id VARCHAR(36) NOT NULL REFERENCES sections(id),
+                    student_id VARCHAR(64) NOT NULL,
+                    attendance_date DATE NOT NULL,
+                    status VARCHAR(16) NOT NULL,
+                    marked_by VARCHAR(64) NOT NULL,
+                    UNIQUE (section_id, student_id, attendance_date)
+                )
+                """
+            )
+        )
+
+
 def seed_default_branches(db: Session) -> None:
     """Give existing institutes a primary branch if they have none."""
     institute_ids = db.scalars(select(Institute.id)).all()

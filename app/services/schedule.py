@@ -15,6 +15,7 @@ from app.models import (
     TimetableEntry,
 )
 from app.services.institutes import get_membership
+from app.roles import MANAGE_ROLES, STAFF_ROLES
 
 
 def get_schedule(db: Session, institute_id: str, user_id: str | None = None) -> dict:
@@ -40,7 +41,7 @@ def get_schedule(db: Session, institute_id: str, user_id: str | None = None) -> 
     entries_query = select(TimetableEntry).where(TimetableEntry.institute_id == institute_id)
     if user_id:
         member = get_membership(db, institute_id, user_id)
-        if member and member.role not in {"owner", "admin"}:
+        if member and member.role not in MANAGE_ROLES | STAFF_ROLES:
             section_ids = select(SectionMember.section_id).where(SectionMember.user_id == user_id)
             entries_query = entries_query.where(TimetableEntry.section_id.in_(section_ids))
     entries = list(db.scalars(entries_query))

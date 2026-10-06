@@ -400,6 +400,7 @@ class SectionOverviewAssignment(BaseModel):
     id: str
     title: str
     description: str
+    assignmentType: str
     dueDate: str | None
     submittedCount: int
     enrolledStudents: int
@@ -433,6 +434,7 @@ class NoteOut(BaseModel):
 class AssignmentCreate(BaseModel):
     title: str
     description: str = ""
+    assignmentType: str = Field(default="assignment", pattern="^(assignment|test)$")
     dueDate: date | None = None
 
 
@@ -440,7 +442,25 @@ class AssignmentOut(BaseModel):
     id: str
     title: str
     description: str
+    assignmentType: str
     dueDate: date | None
+
+
+class AttendanceRecordIn(BaseModel):
+    studentId: str
+    status: str = Field(pattern="^(present|absent|late|excused)$")
+
+
+class AttendanceUpdate(BaseModel):
+    attendanceDate: date
+    records: list[AttendanceRecordIn]
+
+
+class AttendanceOut(BaseModel):
+    studentId: str
+    attendanceDate: date
+    status: str
+    markedBy: str
 
 
 class SubmissionCreate(BaseModel):

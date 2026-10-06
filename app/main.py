@@ -14,6 +14,7 @@ from app.db.migrate import (
     migrate_join_requests,
     migrate_schedule,
     migrate_teacher_absences,
+    migrate_teacher_workspace,
     migrate_subjects,
     run_migrations,
     seed_default_activities,
@@ -23,6 +24,7 @@ from app.db.session import SessionLocal, engine, get_db
 from app.models import (
     Assignment,
     Activity,
+    AttendanceRecord,
     Base,
     Branch,
     DailyNote,
@@ -38,6 +40,8 @@ from app.schemas import (
     AssignMember,
     ActivityCreate,
     ActivityOut,
+    AttendanceOut,
+    AttendanceUpdate,
     AssignmentCreate,
     AssignmentOut,
     BranchCreate,
@@ -169,6 +173,7 @@ async def lifespan(_: FastAPI):
     migrate_activities(engine)
     migrate_schedule(engine)
     migrate_teacher_absences(engine)
+    migrate_teacher_workspace(engine)
     with SessionLocal() as db:
         seed_default_branches(db)
         seed_default_activities(db)
@@ -1278,6 +1283,88 @@ def assign_teacher(
     return {"sectionId": section_id, "userId": body.userId, "type": "teacher"}
 
 
+@app.get("/v1/sections/{section_id}/attendance", response_model=list[AttendanceOut])
+def list_attendance(
+    section_id: str,
+    attendance_date: date | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_section_access(db, section_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    rows = db.scalars(
+        select(AttendanceRecord)
+        .where(
+            AttendanceRecord.section_id == section_id,
+            AttendanceRecord.attendance_date == (attendance_date or date.today()),
+        )
+        .order_by(AttendanceRecord.student_id)
+    )
+    return [
+        AttendanceOut(
+            studentId=row.student_id,
+            attendanceDate=row.attendance_date,
+            status=row.status,
+            markedBy=row.marked_by,
+        )
+        for row in rows
+    ]
+
+
+@app.put("/v1/sections/{section_id}/attendance", response_model=list[AttendanceOut])
+def save_attendance(
+    section_id: str,
+    body: AttendanceUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_section_teacher(db, section_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+    student_ids = set(
+        db.scalars(
+            select(SectionMember.user_id).where(
+                SectionMember.section_id == section_id,
+                SectionMember.member_type == "student",
+            )
+        )
+    )
+    if any(record.studentId not in student_ids for record in body.records):
+        raise HTTPException(status_code=400, detail="Attendance includes an unassigned student")
+
+    for record in body.records:
+        existing = db.scalar(
+            select(AttendanceRecord).where(
+                AttendanceRecord.section_id == section_id,
+                AttendanceRecord.student_id == record.studentId,
+                AttendanceRecord.attendance_date == body.attendanceDate,
+            )
+        )
+        if existing:
+            existing.status = record.status
+            existing.marked_by = user["id"]
+        else:
+            db.add(
+                AttendanceRecord(
+                    section_id=section_id,
+                    student_id=record.studentId,
+                    attendance_date=body.attendanceDate,
+                    status=record.status,
+                    marked_by=user["id"],
+                )
+            )
+    db.commit()
+    return list_attendance(section_id, body.attendanceDate, db, user)
+
+
 @app.post("/v1/sections/{section_id}/students")
 def assign_student(
     section_id: str,
@@ -1358,6 +1445,7 @@ def create_assignment(
         section_id=section_id,
         title=body.title,
         description=body.description,
+        assignment_type=body.assignmentType,
         due_date=body.dueDate,
         created_by=user["id"],
     )
@@ -1368,6 +1456,7 @@ def create_assignment(
         id=assignment.id,
         title=assignment.title,
         description=assignment.description,
+        assignmentType=assignment.assignment_type,
         dueDate=assignment.due_date,
     )
 
@@ -1386,7 +1475,13 @@ def list_assignments(
         raise HTTPException(status_code=404, detail=str(e)) from e
     items = db.scalars(select(Assignment).where(Assignment.section_id == section_id))
     return [
-        AssignmentOut(id=a.id, title=a.title, description=a.description, dueDate=a.due_date)
+        AssignmentOut(
+            id=a.id,
+            title=a.title,
+            description=a.description,
+            assignmentType=a.assignment_type,
+            dueDate=a.due_date,
+        )
         for a in items
     ]
 
