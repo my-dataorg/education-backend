@@ -8,6 +8,7 @@ from app import main
 from app.db.session import get_db
 from app.models import (
     Base,
+    Activity,
     Institute,
     InstituteInvitation,
     InstituteMember,
@@ -205,3 +206,85 @@ def test_schedule_requires_subject_enrollment_link(db: Session):
 
     assert result["entries"][0]["subjectId"] == subject.id
     assert result["entries"][0]["teacherId"] is None
+
+
+def test_schedule_supports_combined_special_activity_day(db: Session):
+    institute = add_institute(db)
+    sections = [
+        Section(id="section-a", institute_id=institute.id, name="A", class_name="7"),
+        Section(id="section-b", institute_id=institute.id, name="B", class_name="7"),
+    ]
+    db.add_all(
+        [
+            *sections,
+            InstituteMember(institute_id=institute.id, user_id="teacher-1", role="teacher"),
+            SectionMember(section_id="section-a", user_id="teacher-1", member_type="teacher"),
+            SectionMember(section_id="section-b", user_id="teacher-1", member_type="teacher"),
+            Activity(id="games", institute_id=institute.id, name="Games"),
+        ]
+    )
+    db.commit()
+
+    body = ScheduleUpdate(
+        revision=1,
+        settings={"schoolStart": "08:00", "schoolEnd": "15:00", "weekdays": [1, 5]},
+        slots=[],
+        entries=[],
+        specialDays=[
+            {
+                "date": "2026-10-09",
+                "label": "Sports day",
+                "replaceRegular": True,
+                "activities": [
+                    {
+                        "activityId": "games",
+                        "start": "10:30",
+                        "end": "11:15",
+                        "position": 0,
+                        "sectionIds": ["section-a", "section-b"],
+                        "teacherIds": ["teacher-1"],
+                    }
+                ],
+            }
+        ],
+    )
+
+    result = replace_schedule(db, institute.id, body)
+
+    activity = result["specialDays"][0]["activities"][0]
+    assert result["specialDays"][0]["label"] == "Sports day"
+    assert activity["sectionIds"] == ["section-a", "section-b"]
+    assert activity["teacherIds"] == ["teacher-1"]
+
+
+def test_schedule_rejects_teacher_period_conflicts(db: Session):
+    institute = add_institute(db)
+    sections = [
+        Section(id="section-a", institute_id=institute.id, name="A", class_name="7"),
+        Section(id="section-b", institute_id=institute.id, name="B", class_name="7"),
+    ]
+    db.add_all(
+        [
+            *sections,
+            InstituteMember(institute_id=institute.id, user_id="teacher-1", role="teacher"),
+        ]
+    )
+    db.commit()
+    first = subjects.create_subject(db, institute.id, "Mathematics")
+    for section in sections:
+        subjects.link_subject(db, section.id, first.id)
+
+    body = ScheduleUpdate(
+        revision=1,
+        settings={"schoolStart": "08:00", "schoolEnd": "15:00", "weekdays": [1]},
+        slots=[
+            {"id": "slot-1", "label": "Math", "kind": "instruction", "start": "08:00", "end": "08:45", "position": 0},
+        ],
+        entries=[
+            {"dayOfWeek": 1, "slotId": "slot-1", "sectionId": section.id, "subjectId": first.id, "teacherId": "teacher-1"}
+            for section in sections
+        ],
+    )
+
+    with pytest.raises(ValueError, match="teacher"):
+        replace_schedule(db, institute.id, body)

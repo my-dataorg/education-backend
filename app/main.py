@@ -13,6 +13,7 @@ from app.db.migrate import (
     migrate_activities,
     migrate_join_requests,
     migrate_schedule,
+    migrate_special_days,
     migrate_teacher_absences,
     migrate_teacher_workspace,
     migrate_institute_posts,
@@ -176,6 +177,7 @@ async def lifespan(_: FastAPI):
     migrate_subjects(engine)
     migrate_activities(engine)
     migrate_schedule(engine)
+    migrate_special_days(engine)
     migrate_teacher_absences(engine)
     migrate_teacher_workspace(engine)
     migrate_institute_posts(engine)

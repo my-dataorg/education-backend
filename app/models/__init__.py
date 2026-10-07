@@ -188,6 +188,48 @@ class TimetableEntry(Base):
     teacher_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
+class ScheduleSpecialDay(Base):
+    __tablename__ = "schedule_special_days"
+    __table_args__ = (UniqueConstraint("institute_id", "special_date"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    institute_id: Mapped[str] = mapped_column(String(36), ForeignKey("institutes.id"))
+    special_date: Mapped[date] = mapped_column(Date)
+    label: Mapped[str] = mapped_column(String(100))
+    replace_regular: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class SpecialDayActivity(Base):
+    __tablename__ = "special_day_activities"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    special_day_id: Mapped[str] = mapped_column(String(36), ForeignKey("schedule_special_days.id"))
+    activity_id: Mapped[str] = mapped_column(String(36), ForeignKey("activities.id"))
+    start_time: Mapped[time] = mapped_column(Time)
+    end_time: Mapped[time] = mapped_column(Time)
+    position: Mapped[int] = mapped_column()
+
+
+class SpecialDayActivitySection(Base):
+    __tablename__ = "special_day_activity_sections"
+    __table_args__ = (UniqueConstraint("special_activity_id", "section_id"),)
+
+    special_activity_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("special_day_activities.id"), primary_key=True
+    )
+    section_id: Mapped[str] = mapped_column(String(36), ForeignKey("sections.id"), primary_key=True)
+
+
+class SpecialDayActivityTeacher(Base):
+    __tablename__ = "special_day_activity_teachers"
+    __table_args__ = (UniqueConstraint("special_activity_id", "teacher_id"),)
+
+    special_activity_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("special_day_activities.id"), primary_key=True
+    )
+    teacher_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+
+
 class TeacherAbsence(Base):
     __tablename__ = "teacher_absences"
     __table_args__ = (UniqueConstraint("institute_id", "teacher_id", "absence_date"),)

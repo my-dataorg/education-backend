@@ -237,6 +237,44 @@ def migrate_schedule(engine: Engine) -> None:
         )
 
 
+def migrate_special_days(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS schedule_special_days (
+                    id VARCHAR(36) PRIMARY KEY,
+                    institute_id VARCHAR(36) NOT NULL REFERENCES institutes(id),
+                    special_date DATE NOT NULL,
+                    label VARCHAR(100) NOT NULL,
+                    replace_regular BOOLEAN NOT NULL DEFAULT TRUE,
+                    UNIQUE (institute_id, special_date)
+                );
+                CREATE TABLE IF NOT EXISTS special_day_activities (
+                    id VARCHAR(36) PRIMARY KEY,
+                    special_day_id VARCHAR(36) NOT NULL REFERENCES schedule_special_days(id),
+                    activity_id VARCHAR(36) NOT NULL REFERENCES activities(id),
+                    start_time TIME NOT NULL,
+                    end_time TIME NOT NULL,
+                    position INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS special_day_activity_sections (
+                    special_activity_id VARCHAR(36) NOT NULL REFERENCES special_day_activities(id),
+                    section_id VARCHAR(36) NOT NULL REFERENCES sections(id),
+                    PRIMARY KEY (special_activity_id, section_id)
+                );
+                CREATE TABLE IF NOT EXISTS special_day_activity_teachers (
+                    special_activity_id VARCHAR(36) NOT NULL REFERENCES special_day_activities(id),
+                    teacher_id VARCHAR(64) NOT NULL,
+                    PRIMARY KEY (special_activity_id, teacher_id)
+                );
+                CREATE INDEX IF NOT EXISTS schedule_special_days_institute_date_idx
+                    ON schedule_special_days (institute_id, special_date);
+                """
+            )
+        )
+
+
 def migrate_teacher_absences(engine: Engine) -> None:
     with engine.begin() as conn:
         conn.execute(

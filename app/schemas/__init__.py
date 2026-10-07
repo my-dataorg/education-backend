@@ -325,12 +325,31 @@ class TimetableEntryOut(BaseModel):
     teacherId: str | None = None
 
 
+class SpecialDayActivityOut(BaseModel):
+    id: str
+    activityId: str
+    start: str
+    end: str
+    position: int
+    sectionIds: list[str]
+    teacherIds: list[str]
+
+
+class SpecialDayOut(BaseModel):
+    id: str
+    date: date
+    label: str
+    replaceRegular: bool
+    activities: list[SpecialDayActivityOut]
+
+
 class ScheduleOut(BaseModel):
     instituteId: str
     revision: int
     settings: ScheduleSettingsOut
     slots: list[ScheduleSlotOut]
     entries: list[TimetableEntryOut]
+    specialDays: list[SpecialDayOut] = Field(default_factory=list)
 
 
 class ScheduleSettingsIn(BaseModel):
@@ -369,11 +388,43 @@ class TimetableEntryIn(BaseModel):
     teacherId: str | None = None
 
 
+class SpecialDayActivityIn(BaseModel):
+    activityId: str
+    start: str
+    end: str
+    position: int = Field(ge=0)
+    sectionIds: list[str] = Field(min_length=1)
+    teacherIds: list[str] = Field(min_length=1)
+
+    @field_validator("sectionIds", "teacherIds")
+    @classmethod
+    def require_unique_ids(cls, value: list[str]) -> list[str]:
+        if len(value) != len(set(value)):
+            raise ValueError("Special activity IDs must be unique")
+        return value
+
+
+class SpecialDayIn(BaseModel):
+    date: date
+    label: str = Field(min_length=1, max_length=100)
+    replaceRegular: bool = True
+    activities: list[SpecialDayActivityIn] = Field(min_length=1)
+
+    @field_validator("label")
+    @classmethod
+    def require_label(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Special day label is required")
+        return value
+
+
 class ScheduleUpdate(BaseModel):
     revision: int
     settings: ScheduleSettingsIn
     slots: list[ScheduleSlotIn]
     entries: list[TimetableEntryIn]
+    specialDays: list[SpecialDayIn] | None = None
 
 
 class TeacherAbsenceCreate(BaseModel):
