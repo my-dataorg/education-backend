@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.models import (
     Assignment,
+    AttendanceRecord,
     Branch,
     DailyNote,
     Section,
@@ -305,3 +306,145 @@ def get_section_overview(db: Session, section_id: str, user_id: str) -> dict:
         overview["students"] = enrich_rows([{"userId": s.user_id} for s in students])
         overview["teachers"] = enrich_rows([{"userId": t.user_id} for t in teachers])
     return overview
+
+
+def get_student_insights(db: Session, section_id: str, user_id: str) -> list[dict]:
+    require_section_teacher(db, section_id, user_id)
+    students = list(
+        db.scalars(
+            select(SectionMember).where(
+                SectionMember.section_id == section_id,
+                SectionMember.member_type == "student",
+            )
+        )
+    )
+    assignments = list(
+        db.scalars(select(Assignment).where(Assignment.section_id == section_id))
+    )
+    rows = []
+    for student in students:
+        completed = sum(
+            1
+            for assignment in assignments
+            if db.scalar(
+                select(Submission.id).where(
+                    Submission.assignment_id == assignment.id,
+                    Submission.student_id == student.user_id,
+                )
+            )
+        )
+        attendance = list(
+            db.scalars(
+                select(AttendanceRecord).where(
+                    AttendanceRecord.section_id == section_id,
+                    AttendanceRecord.student_id == student.user_id,
+                )
+            )
+        )
+        counts = {status: 0 for status in ("present", "absent", "late", "excused")}
+        for record in attendance:
+            counts[record.status] = counts.get(record.status, 0) + 1
+        marked = sum(counts.values())
+        rows.append(
+            {
+                **enrich_rows([{"userId": student.user_id}])[0],
+                "performancePercent": round(completed * 100 / len(assignments))
+                if assignments
+                else None,
+                "attendance": {
+                    **counts,
+                    "marked": marked,
+                    "attendancePercent": round(
+                        (counts["present"] + counts["late"]) * 100 / marked
+                    )
+                    if marked
+                    else None,
+                },
+            }
+        )
+    return rows
+
+
+def get_student_performance(
+    db: Session, section_id: str, student_id: str, user_id: str
+) -> dict:
+    require_section_teacher(db, section_id, user_id)
+    _require_student(db, section_id, student_id)
+    assignments = list(
+        db.scalars(
+            select(Assignment)
+            .where(Assignment.section_id == section_id)
+            .order_by(Assignment.due_date.desc().nulls_last())
+        )
+    )
+    records = []
+    for assignment in assignments:
+        submitted = db.scalar(
+            select(Submission.id).where(
+                Submission.assignment_id == assignment.id,
+                Submission.student_id == student_id,
+            )
+        )
+        year = str(assignment.due_date.year) if assignment.due_date else "Undated"
+        records.append(
+            {
+                "assignmentId": assignment.id,
+                "title": assignment.title,
+                "type": assignment.assignment_type,
+                "academicYear": year,
+                "date": assignment.due_date.isoformat() if assignment.due_date else None,
+                "percentage": 100 if submitted else 0,
+                "submitted": bool(submitted),
+            }
+        )
+    return {
+        "studentId": student_id,
+        "overallPercent": round(
+            sum(item["percentage"] for item in records) / len(records)
+        )
+        if records
+        else None,
+        "academicYears": sorted({item["academicYear"] for item in records}, reverse=True),
+        "records": records,
+    }
+
+
+def get_student_attendance(
+    db: Session,
+    section_id: str,
+    student_id: str,
+    user_id: str,
+    start_date,
+    end_date,
+) -> dict:
+    require_section_teacher(db, section_id, user_id)
+    _require_student(db, section_id, student_id)
+    records = list(
+        db.scalars(
+            select(AttendanceRecord)
+            .where(
+                AttendanceRecord.section_id == section_id,
+                AttendanceRecord.student_id == student_id,
+                AttendanceRecord.attendance_date >= start_date,
+                AttendanceRecord.attendance_date <= end_date,
+            )
+            .order_by(AttendanceRecord.attendance_date)
+        )
+    )
+    counts = {status: 0 for status in ("present", "absent", "late", "excused")}
+    output = []
+    for record in records:
+        counts[record.status] = counts.get(record.status, 0) + 1
+        output.append({"date": record.attendance_date, "status": record.status})
+    return {"studentId": student_id, "summary": counts, "records": output}
+
+
+def _require_student(db: Session, section_id: str, student_id: str) -> None:
+    if not db.scalar(
+        select(SectionMember).where(
+            SectionMember.section_id == section_id,
+            SectionMember.user_id == student_id,
+            SectionMember.member_type == "student",
+        )
+    ):
+        raise ValueError("Student is not assigned to this section")

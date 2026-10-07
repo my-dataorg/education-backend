@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import date, timedelta
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -118,6 +118,9 @@ from app.services.sections import (
     assign_section_member,
     delete_section,
     get_section_overview,
+    get_student_attendance,
+    get_student_insights,
+    get_student_performance,
     list_member_sections,
     list_my_enrolled_sections,
     remove_section_member,
@@ -1324,6 +1327,56 @@ def section_overview(
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     return SectionOverviewOut(**data)
+
+
+@app.get("/v1/sections/{section_id}/student-insights")
+def section_student_insights(
+    section_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        return get_student_insights(db, section_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@app.get("/v1/sections/{section_id}/students/{student_id}/performance")
+def student_performance(
+    section_id: str,
+    student_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        return get_student_performance(db, section_id, student_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@app.get("/v1/sections/{section_id}/students/{student_id}/attendance")
+def student_attendance_history(
+    section_id: str,
+    student_id: str,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    end = end_date or date.today()
+    start = start_date or end - timedelta(days=365)
+    if start > end:
+        raise HTTPException(status_code=400, detail="Start date must be before end date")
+    try:
+        return get_student_attendance(db, section_id, student_id, user["id"], start, end)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
 
 @app.post("/v1/sections/{section_id}/teachers")
