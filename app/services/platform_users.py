@@ -20,6 +20,7 @@ def _item_to_brief(item: dict) -> dict:
         "displayName": (item.get("name") or "").strip(),
         "email": (item.get("email") or "").strip().lower(),
         "username": (item.get("username") or "").strip(),
+        "dateOfBirth": item.get("dateOfBirth"),
     }
 
 

@@ -15,6 +15,7 @@ from app.db.migrate import (
     migrate_schedule,
     migrate_teacher_absences,
     migrate_teacher_workspace,
+    migrate_institute_posts,
     migrate_subjects,
     run_migrations,
     seed_default_activities,
@@ -31,6 +32,7 @@ from app.models import (
     Institute,
     InstituteJoinRequest,
     InstituteMember,
+    InstitutePost,
     Section,
     SectionMember,
     Submission,
@@ -52,6 +54,8 @@ from app.schemas import (
     InstituteOut,
     InstituteStats,
     InstituteSummaryOut,
+    InstitutePostCreate,
+    InstitutePostOut,
     InvitationCreate,
     InvitationOut,
     InvitationRespondOut,
@@ -174,6 +178,7 @@ async def lifespan(_: FastAPI):
     migrate_schedule(engine)
     migrate_teacher_absences(engine)
     migrate_teacher_workspace(engine)
+    migrate_institute_posts(engine)
     with SessionLocal() as db:
         seed_default_branches(db)
         seed_default_activities(db)
@@ -760,6 +765,62 @@ def list_sections(
         select(Section).where(Section.institute_id == institute_id).order_by(Section.name)
     )
     return [_section_out(db, s) for s in sections]
+
+
+@app.get("/v1/institutes/{institute_id}/posts", response_model=list[InstitutePostOut])
+def list_posts(
+    institute_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_membership(db, institute_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    rows = db.scalars(
+        select(InstitutePost)
+        .where(InstitutePost.institute_id == institute_id)
+        .order_by(InstitutePost.created_at.desc())
+    )
+    return [
+        InstitutePostOut(
+            id=row.id,
+            title=row.title,
+            body=row.body,
+            postedBy=row.posted_by,
+            createdAt=row.created_at,
+        )
+        for row in rows
+    ]
+
+
+@app.post("/v1/institutes/{institute_id}/posts", response_model=InstitutePostOut, status_code=201)
+def create_post(
+    institute_id: str,
+    body: InstitutePostCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_manage(db, institute_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    row = InstitutePost(
+        institute_id=institute_id,
+        title=body.title,
+        body=body.body,
+        posted_by=user["id"],
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return InstitutePostOut(
+        id=row.id,
+        title=row.title,
+        body=row.body,
+        postedBy=row.posted_by,
+        createdAt=row.created_at,
+    )
 
 
 @app.get("/v1/institutes/{institute_id}/schedule", response_model=ScheduleOut)

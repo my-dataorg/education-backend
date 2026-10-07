@@ -40,6 +40,17 @@ class InstituteMember(Base):
     role: Mapped[str] = mapped_column(String(32))
 
 
+class InstitutePost(Base):
+    __tablename__ = "institute_posts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    institute_id: Mapped[str] = mapped_column(String(36), ForeignKey("institutes.id"))
+    title: Mapped[str] = mapped_column(String(200))
+    body: Mapped[str] = mapped_column(Text)
+    posted_by: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class InstituteInvitation(Base):
     __tablename__ = "institute_invitations"
     __table_args__ = (UniqueConstraint("institute_id", "invitee_user_id", "status"),)

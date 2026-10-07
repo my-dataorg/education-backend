@@ -283,6 +283,24 @@ def migrate_teacher_workspace(engine: Engine) -> None:
         )
 
 
+def migrate_institute_posts(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS institute_posts (
+                    id VARCHAR(36) PRIMARY KEY,
+                    institute_id VARCHAR(36) NOT NULL REFERENCES institutes(id),
+                    title VARCHAR(200) NOT NULL,
+                    body TEXT NOT NULL,
+                    posted_by VARCHAR(64) NOT NULL,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+                """
+            )
+        )
+
+
 def seed_default_branches(db: Session) -> None:
     """Give existing institutes a primary branch if they have none."""
     institute_ids = db.scalars(select(Institute.id)).all()

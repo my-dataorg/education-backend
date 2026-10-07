@@ -42,6 +42,7 @@ class MemberOut(BaseModel):
     displayName: str = ""
     email: str = ""
     username: str = ""
+    dateOfBirth: date | None = None
 
 
 class MemberAdd(BaseModel):
@@ -68,6 +69,7 @@ class BranchTeacherBrief(BaseModel):
     displayName: str = ""
     email: str = ""
     username: str = ""
+    dateOfBirth: date | None = None
 
 
 class BranchStudentBrief(BaseModel):
@@ -78,6 +80,7 @@ class BranchStudentBrief(BaseModel):
     displayName: str = ""
     email: str = ""
     username: str = ""
+    dateOfBirth: date | None = None
 
 
 class UpcomingEventOut(BaseModel):
@@ -429,6 +432,19 @@ class NoteOut(BaseModel):
     content: str
     noteDate: date
     teacherId: str
+
+
+class InstitutePostCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    body: str = Field(min_length=1, max_length=5000)
+
+
+class InstitutePostOut(BaseModel):
+    id: str
+    title: str
+    body: str
+    postedBy: str
+    createdAt: datetime
 
 
 class AssignmentCreate(BaseModel):
