@@ -61,6 +61,7 @@ from app.schemas import (
     AcademicTermOut,
     AcademicYearOut,
     AcademicYearUpdate,
+    OwnerOverviewOut,
     InvitationCreate,
     InvitationOut,
     InvitationRespondOut,
@@ -119,6 +120,7 @@ from app.services.institutes import (
     update_branch,
 )
 from app.services.academic_years import get_or_create_active, terms, update_active
+from app.services.overview import get_owner_overview
 from app.services.sections import (
     assign_section_member,
     delete_section,
@@ -407,6 +409,27 @@ def institute_summary(
         raise HTTPException(status_code=403, detail=str(e)) from e
     data = get_institute_summary(db, institute_id)
     return InstituteSummaryOut(**data)
+
+
+@app.get("/v1/institutes/{institute_id}/overview", response_model=OwnerOverviewOut)
+def owner_overview(
+    institute_id: str,
+    campus_id: str | None = None,
+    day: date | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        data = get_owner_overview(
+            db,
+            institute_id,
+            user["id"],
+            campus_id,
+            day or date.today(),
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    return OwnerOverviewOut(**data)
 
 
 @app.get("/v1/institutes/{institute_id}/members", response_model=list[MemberOut])

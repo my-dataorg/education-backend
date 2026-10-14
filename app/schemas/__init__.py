@@ -158,6 +158,53 @@ class InstituteSummaryOut(BaseModel):
     pendingInvitations: int = 0
 
 
+class OverviewStatsOut(BaseModel):
+    students: int | None = None
+    staff: int | None = None
+    attendancePercent: int | None = None
+    unmarkedClasses: int | None = None
+    assignmentCompletionPercent: int | None = None
+    pendingApprovals: int | None = None
+
+
+class OverviewAttentionOut(BaseModel):
+    kind: str
+    count: int
+    label: str
+
+
+class OverviewAttendanceOut(BaseModel):
+    sectionId: str
+    label: str
+    marked: bool
+    present: int
+    total: int
+    percent: int | None = None
+
+
+class OverviewUpcomingOut(BaseModel):
+    id: str
+    type: str
+    title: str
+    date: date
+    sectionId: str
+
+
+class OverviewPostOut(BaseModel):
+    id: str
+    title: str
+    body: str
+    createdAt: datetime
+
+
+class OwnerOverviewOut(BaseModel):
+    stats: OverviewStatsOut
+    attention: list[OverviewAttentionOut]
+    attendanceByClass: list[OverviewAttendanceOut]
+    upcoming: list[OverviewUpcomingOut]
+    posts: list[OverviewPostOut]
+
+
 class InvitationCreate(BaseModel):
     userId: str
     role: str = Field(pattern="^(teacher|student|parent)$")
