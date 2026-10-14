@@ -1,3 +1,5 @@
+from datetime import date
+
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -9,6 +11,7 @@ from app.db.session import get_db
 from app.models import (
     Base,
     Activity,
+    AttendanceRecord,
     Institute,
     InstituteInvitation,
     InstituteMember,
@@ -206,6 +209,52 @@ def test_schedule_requires_subject_enrollment_link(db: Session):
 
     assert result["entries"][0]["subjectId"] == subject.id
     assert result["entries"][0]["teacherId"] is None
+
+
+def test_student_attendance_is_scoped_to_current_student(db: Session, client: TestClient):
+    institute = add_institute(db)
+    section = Section(id="section-1", institute_id=institute.id, name="A", class_name="1")
+    db.add_all(
+        [
+            section,
+            InstituteMember(institute_id=institute.id, user_id="student-1", role="student"),
+            InstituteMember(institute_id=institute.id, user_id="student-2", role="student"),
+            SectionMember(section_id=section.id, user_id="student-1", member_type="student"),
+            SectionMember(section_id=section.id, user_id="student-2", member_type="student"),
+            AttendanceRecord(
+                section_id=section.id,
+                student_id="student-1",
+                attendance_date=date(2026, 10, 13),
+                status="present",
+                marked_by="teacher",
+            ),
+            AttendanceRecord(
+                section_id=section.id,
+                student_id="student-2",
+                attendance_date=date(2026, 10, 13),
+                status="absent",
+                marked_by="teacher",
+            ),
+        ]
+    )
+    db.commit()
+    main.app.dependency_overrides[main.require_education_subscription] = (
+        lambda: {"id": "student-1", "email": "student-1@example.com", "token": "test"}
+    )
+
+    response = client.get(
+        f"/v1/sections/{section.id}/attendance?attendance_date=2026-10-13"
+    )
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "studentId": "student-1",
+            "attendanceDate": "2026-10-13",
+            "status": "present",
+            "markedBy": "teacher",
+        }
+    ]
 
 
 def test_schedule_supports_combined_special_activity_day(db: Session):

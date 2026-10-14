@@ -30,6 +30,34 @@ class Branch(Base):
     is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
+class AcademicYear(Base):
+    __tablename__ = "academic_years"
+    __table_args__ = (UniqueConstraint("institute_id", "label"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    institute_id: Mapped[str] = mapped_column(String(36), ForeignKey("institutes.id"))
+    label: Mapped[str] = mapped_column(String(32))
+    start_date: Mapped[date] = mapped_column(Date)
+    end_date: Mapped[date] = mapped_column(Date)
+    board: Mapped[str] = mapped_column(String(32), default="CBSE")
+    term_count: Mapped[int] = mapped_column(default=2)
+    grading_scale: Mapped[str] = mapped_column(String(64), default="Marks + grade (A1–E)")
+    medium: Mapped[str] = mapped_column(String(64), default="English")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class AcademicTerm(Base):
+    __tablename__ = "academic_terms"
+    __table_args__ = (UniqueConstraint("academic_year_id", "name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    academic_year_id: Mapped[str] = mapped_column(String(36), ForeignKey("academic_years.id"))
+    name: Mapped[str] = mapped_column(String(64))
+    start_date: Mapped[date] = mapped_column(Date)
+    end_date: Mapped[date] = mapped_column(Date)
+    weight_percent: Mapped[int] = mapped_column(default=50)
+
+
 class InstituteMember(Base):
     __tablename__ = "institute_members"
     __table_args__ = (UniqueConstraint("institute_id", "user_id"),)

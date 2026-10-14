@@ -1,5 +1,5 @@
 MANAGE_ROLES = frozenset({"owner", "admin"})
-JOIN_REQUEST_ROLES = frozenset({"teacher", "lecturer", "professor", "student"})
+JOIN_REQUEST_ROLES = frozenset({"teacher", "lecturer", "professor", "student", "parent"})
 STAFF_ROLES = frozenset({"owner", "admin", "principal", "teacher", "lecturer", "professor"})
 TEACHING_STAFF_ROLES = frozenset({"principal", "teacher", "lecturer", "professor"})
 TEACHER_ROLES = frozenset({"owner", "admin", "principal", "teacher", "lecturer", "professor"})
@@ -8,7 +8,7 @@ VIEW_DIRECTORY_ROLES = STAFF_ROLES
 STAFF_MANAGEABLE_ROLES = frozenset({"admin", "principal", "teacher", "lecturer", "professor"})
 STUDENT_ROLE = "student"
 ALL_ASSIGNABLE_ROLES = STAFF_MANAGEABLE_ROLES | {STUDENT_ROLE}
-INVITATION_ROLES = frozenset({"teacher", STUDENT_ROLE})
+INVITATION_ROLES = frozenset({"teacher", STUDENT_ROLE, "parent"})
 
 ROLE_LABELS = {
     "owner": "Owner",
@@ -18,4 +18,5 @@ ROLE_LABELS = {
     "lecturer": "Lecturer",
     "professor": "Professor",
     "student": "Student",
+    "parent": "Parent / guardian",
 }

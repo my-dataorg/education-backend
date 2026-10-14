@@ -17,6 +17,7 @@ from app.db.migrate import (
     migrate_teacher_absences,
     migrate_teacher_workspace,
     migrate_institute_posts,
+    migrate_academic_years,
     migrate_subjects,
     run_migrations,
     seed_default_activities,
@@ -57,6 +58,9 @@ from app.schemas import (
     InstituteSummaryOut,
     InstitutePostCreate,
     InstitutePostOut,
+    AcademicTermOut,
+    AcademicYearOut,
+    AcademicYearUpdate,
     InvitationCreate,
     InvitationOut,
     InvitationRespondOut,
@@ -114,6 +118,7 @@ from app.services.institutes import (
     require_owner,
     update_branch,
 )
+from app.services.academic_years import get_or_create_active, terms, update_active
 from app.services.sections import (
     assign_section_member,
     delete_section,
@@ -184,6 +189,7 @@ async def lifespan(_: FastAPI):
     migrate_teacher_absences(engine)
     migrate_teacher_workspace(engine)
     migrate_institute_posts(engine)
+    migrate_academic_years(engine)
     with SessionLocal() as db:
         seed_default_branches(db)
         seed_default_activities(db)
@@ -324,6 +330,69 @@ def get_institute(
         createdAt=inst.created_at,
         stats=InstituteStats(**stats),
     )
+
+
+def _academic_year_out(db: Session, year) -> AcademicYearOut:
+    return AcademicYearOut(
+        id=year.id,
+        label=year.label,
+        startDate=year.start_date,
+        endDate=year.end_date,
+        board=year.board,
+        termCount=year.term_count,
+        gradingScale=year.grading_scale,
+        medium=year.medium,
+        isActive=year.is_active,
+        terms=[
+            AcademicTermOut(
+                id=term.id,
+                name=term.name,
+                startDate=term.start_date,
+                endDate=term.end_date,
+                weightPercent=term.weight_percent,
+            )
+            for term in terms(db, year.id)
+        ],
+    )
+
+
+@app.get("/v1/institutes/{institute_id}/academic-year", response_model=AcademicYearOut)
+def get_academic_year(
+    institute_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        return _academic_year_out(db, get_or_create_active(db, institute_id, user["id"]))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+
+
+@app.put("/v1/institutes/{institute_id}/academic-year", response_model=AcademicYearOut)
+def save_academic_year(
+    institute_id: str,
+    body: AcademicYearUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        year = update_active(
+            db,
+            institute_id,
+            user["id"],
+            {
+                "label": body.label,
+                "start_date": body.startDate,
+                "end_date": body.endDate,
+                "board": body.board,
+                "term_count": body.termCount,
+                "grading_scale": body.gradingScale,
+                "medium": body.medium,
+            },
+        )
+        return _academic_year_out(db, year)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
 
 
 @app.get("/v1/institutes/{institute_id}/summary", response_model=InstituteSummaryOut)
@@ -1406,20 +1475,23 @@ def list_attendance(
     db: Session = Depends(get_db),
     user: User = Depends(require_education_subscription),
 ):
+    section = db.get(Section, section_id)
+    if not section:
+        raise HTTPException(status_code=404, detail="Section not found")
     try:
         require_section_access(db, section_id, user["id"])
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
-    rows = db.scalars(
-        select(AttendanceRecord)
-        .where(
-            AttendanceRecord.section_id == section_id,
-            AttendanceRecord.attendance_date == (attendance_date or date.today()),
-        )
-        .order_by(AttendanceRecord.student_id)
+    query = select(AttendanceRecord).where(
+        AttendanceRecord.section_id == section_id,
+        AttendanceRecord.attendance_date == (attendance_date or date.today()),
     )
+    member = get_membership(db, section.institute_id, user["id"])
+    if member and member.role == "student":
+        query = query.where(AttendanceRecord.student_id == user["id"])
+    rows = db.scalars(query.order_by(AttendanceRecord.student_id))
     return [
         AttendanceOut(
             studentId=row.student_id,

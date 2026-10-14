@@ -21,6 +21,37 @@ class InstituteStats(BaseModel):
     branchCount: int
 
 
+class AcademicTermOut(BaseModel):
+    id: str
+    name: str
+    startDate: date
+    endDate: date
+    weightPercent: int
+
+
+class AcademicYearOut(BaseModel):
+    id: str
+    label: str
+    startDate: date
+    endDate: date
+    board: str
+    termCount: int
+    gradingScale: str
+    medium: str
+    isActive: bool
+    terms: list[AcademicTermOut]
+
+
+class AcademicYearUpdate(BaseModel):
+    label: str = Field(min_length=4, max_length=32)
+    startDate: date
+    endDate: date
+    board: str = Field(min_length=2, max_length=32)
+    termCount: int = Field(ge=1, le=4)
+    gradingScale: str = Field(min_length=2, max_length=64)
+    medium: str = Field(min_length=2, max_length=64)
+
+
 class InstituteDetailOut(BaseModel):
     id: str
     name: str
@@ -47,11 +78,11 @@ class MemberOut(BaseModel):
 
 class MemberAdd(BaseModel):
     userId: str
-    role: str = Field(pattern="^(admin|principal|teacher|lecturer|professor|student)$")
+    role: str = Field(pattern="^(admin|principal|teacher|lecturer|professor|student|parent)$")
 
 
 class MemberRoleUpdate(BaseModel):
-    role: str = Field(pattern="^(admin|principal|teacher|lecturer|professor|student)$")
+    role: str = Field(pattern="^(admin|principal|teacher|lecturer|professor|student|parent)$")
 
 
 class MemberProfileOut(BaseModel):
@@ -129,7 +160,7 @@ class InstituteSummaryOut(BaseModel):
 
 class InvitationCreate(BaseModel):
     userId: str
-    role: str = Field(pattern="^(teacher|student)$")
+    role: str = Field(pattern="^(teacher|student|parent)$")
 
 
 class InvitationOut(BaseModel):
@@ -154,7 +185,7 @@ class InvitationRespondOut(BaseModel):
 
 
 class JoinRequestCreate(BaseModel):
-    requestedRole: str = Field(pattern="^(teacher|lecturer|professor|student)$")
+    requestedRole: str = Field(pattern="^(teacher|lecturer|professor|student|parent)$")
     message: str = ""
 
 

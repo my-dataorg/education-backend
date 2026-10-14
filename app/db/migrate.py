@@ -36,6 +36,38 @@ def run_migrations(engine: Engine) -> None:
         )
 
 
+def migrate_academic_years(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS academic_years (
+                  id VARCHAR(36) PRIMARY KEY,
+                  institute_id VARCHAR(36) NOT NULL REFERENCES institutes(id),
+                  label VARCHAR(32) NOT NULL,
+                  start_date DATE NOT NULL,
+                  end_date DATE NOT NULL,
+                  board VARCHAR(32) NOT NULL DEFAULT 'CBSE',
+                  term_count INTEGER NOT NULL DEFAULT 2,
+                  grading_scale VARCHAR(64) NOT NULL DEFAULT 'Marks + grade (A1–E)',
+                  medium VARCHAR(64) NOT NULL DEFAULT 'English',
+                  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                  CONSTRAINT academic_years_institute_label UNIQUE (institute_id, label)
+                );
+                CREATE TABLE IF NOT EXISTS academic_terms (
+                  id VARCHAR(36) PRIMARY KEY,
+                  academic_year_id VARCHAR(36) NOT NULL REFERENCES academic_years(id),
+                  name VARCHAR(64) NOT NULL,
+                  start_date DATE NOT NULL,
+                  end_date DATE NOT NULL,
+                  weight_percent INTEGER NOT NULL DEFAULT 50,
+                  CONSTRAINT academic_terms_year_name UNIQUE (academic_year_id, name)
+                );
+                """
+            )
+        )
+
+
 def migrate_invitations(engine: Engine) -> None:
     with engine.begin() as conn:
         conn.execute(
