@@ -1,4 +1,4 @@
-from datetime import time
+from datetime import datetime, time, timezone
 
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.models import (
     Activity,
     InstituteMember,
+    PublishedTimetableEntry,
     ScheduleSettings,
     ScheduleSlot,
     ScheduleSpecialDay,
@@ -20,7 +21,8 @@ from app.models import (
     TimetableEntry,
 )
 from app.services.institutes import get_membership
-from app.roles import MANAGE_ROLES, STAFF_ROLES, TEACHING_STAFF_ROLES
+from app.services.timetable import entries_changed_since_publish
+from app.roles import MANAGE_ROLES, STAFF_ROLES, TEACHING_STAFF_ROLES, TIMETABLE_EDIT_ROLES
 
 
 def get_schedule(db: Session, institute_id: str, user_id: str | None = None) -> dict:
@@ -43,13 +45,32 @@ def get_schedule(db: Session, institute_id: str, user_id: str | None = None) -> 
             .order_by(ScheduleSlot.position)
         )
     )
-    entries_query = select(TimetableEntry).where(TimetableEntry.institute_id == institute_id)
-    if user_id:
-        member = get_membership(db, institute_id, user_id)
-        if member and member.role not in MANAGE_ROLES | STAFF_ROLES:
+    member = get_membership(db, institute_id, user_id) if user_id else None
+    use_published = bool(
+        member
+        and member.role not in TIMETABLE_EDIT_ROLES
+        and settings.published_at
+    )
+    if use_published:
+        entries_query = select(PublishedTimetableEntry).where(
+            PublishedTimetableEntry.institute_id == institute_id
+        )
+    elif member and member.role not in TIMETABLE_EDIT_ROLES and not settings.published_at:
+        entries = []
+        entries_query = None
+    else:
+        entries_query = select(TimetableEntry).where(TimetableEntry.institute_id == institute_id)
+
+    if entries_query is not None:
+        if user_id and member and member.role not in MANAGE_ROLES | STAFF_ROLES:
             section_ids = select(SectionMember.section_id).where(SectionMember.user_id == user_id)
-            entries_query = entries_query.where(TimetableEntry.section_id.in_(section_ids))
-    entries = list(db.scalars(entries_query))
+            if use_published:
+                entries_query = entries_query.where(
+                    PublishedTimetableEntry.section_id.in_(section_ids)
+                )
+            else:
+                entries_query = entries_query.where(TimetableEntry.section_id.in_(section_ids))
+        entries = list(db.scalars(entries_query))
     special_days = list(
         db.scalars(
             select(ScheduleSpecialDay)
@@ -58,7 +79,7 @@ def get_schedule(db: Session, institute_id: str, user_id: str | None = None) -> 
         )
     )
     visible_sections = None
-    if user_id and member and member.role not in MANAGE_ROLES | STAFF_ROLES:
+    if member and member.role not in MANAGE_ROLES | STAFF_ROLES:
         visible_sections = set(
             db.scalars(
                 select(SectionMember.section_id).where(SectionMember.user_id == user_id)
@@ -200,6 +221,8 @@ def replace_schedule(db: Session, institute_id: str, body) -> dict:
                 section_id=entry_input.sectionId,
                 subject_id=entry_input.subjectId,
                 teacher_id=entry_input.teacherId,
+                room=entry_input.room,
+                locked=entry_input.locked,
             )
         )
 
@@ -234,6 +257,7 @@ def replace_schedule(db: Session, institute_id: str, body) -> dict:
     settings.school_end = end
     settings.weekdays = ",".join(str(day) for day in body.settings.weekdays)
     settings.revision += 1
+    settings.draft_saved_at = datetime.now(timezone.utc)
     db.commit()
     return get_schedule(db, institute_id)
 
@@ -410,6 +434,9 @@ def _output(
     return {
         "instituteId": settings.institute_id,
         "revision": settings.revision,
+        "publishedAt": settings.published_at,
+        "draftSavedAt": settings.draft_saved_at,
+        "changedSincePublish": entries_changed_since_publish(db, settings.institute_id),
         "settings": {
             "timezone": settings.timezone,
             "schoolStart": settings.school_start.strftime("%H:%M"),
@@ -437,6 +464,8 @@ def _output(
                 "sectionId": entry.section_id,
                 "subjectId": entry.subject_id,
                 "teacherId": entry.teacher_id,
+                "room": entry.room,
+                "locked": entry.locked,
             }
             for entry in entries
         ],

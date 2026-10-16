@@ -158,8 +158,11 @@ def migrate_subjects(engine: Engine) -> None:
                     id VARCHAR(36) PRIMARY KEY,
                     section_id VARCHAR(36) NOT NULL REFERENCES sections(id),
                     subject_id VARCHAR(36) NOT NULL REFERENCES subjects(id),
+                    weekly_periods INTEGER,
                     UNIQUE (section_id, subject_id)
                 );
+                ALTER TABLE section_subjects
+                ADD COLUMN IF NOT EXISTS weekly_periods INTEGER;
                 CREATE TABLE IF NOT EXISTS teacher_subject_assignments (
                     id VARCHAR(36) PRIMARY KEY,
                     section_id VARCHAR(36) NOT NULL REFERENCES sections(id),
@@ -353,6 +356,102 @@ def migrate_teacher_workspace(engine: Engine) -> None:
         )
 
 
+def migrate_institute_role_settings(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS institute_role_settings (
+                    institute_id VARCHAR(36) PRIMARY KEY REFERENCES institutes(id),
+                    principal_can_edit_timetable BOOLEAN NOT NULL DEFAULT TRUE
+                );
+                """
+            )
+        )
+
+
+def migrate_timetable_substitutions(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS timetable_substitutions (
+                    id VARCHAR(36) PRIMARY KEY,
+                    institute_id VARCHAR(36) NOT NULL REFERENCES institutes(id),
+                    substitution_date DATE NOT NULL,
+                    slot_id VARCHAR(36) NOT NULL REFERENCES schedule_slots(id),
+                    section_id VARCHAR(36) NOT NULL REFERENCES sections(id),
+                    original_teacher_id VARCHAR(64) NOT NULL,
+                    substitute_teacher_id VARCHAR(64) NOT NULL,
+                    UNIQUE (institute_id, substitution_date, slot_id, section_id)
+                );
+                """
+            )
+        )
+
+
+def migrate_timetable_publish(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                ALTER TABLE timetable_entries
+                ADD COLUMN IF NOT EXISTS room VARCHAR(30)
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                ALTER TABLE timetable_entries
+                ADD COLUMN IF NOT EXISTS locked BOOLEAN NOT NULL DEFAULT FALSE
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                ALTER TABLE schedule_settings
+                ADD COLUMN IF NOT EXISTS published_at TIMESTAMPTZ
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                ALTER TABLE schedule_settings
+                ADD COLUMN IF NOT EXISTS draft_saved_at TIMESTAMPTZ
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                ALTER TABLE section_subjects
+                ADD COLUMN IF NOT EXISTS weekly_periods INTEGER
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS published_timetable_entries (
+                    id VARCHAR(36) PRIMARY KEY,
+                    institute_id VARCHAR(36) NOT NULL REFERENCES institutes(id),
+                    slot_id VARCHAR(36) NOT NULL REFERENCES schedule_slots(id),
+                    day_of_week INTEGER NOT NULL,
+                    section_id VARCHAR(36) NOT NULL REFERENCES sections(id),
+                    subject_id VARCHAR(36) NOT NULL REFERENCES subjects(id),
+                    teacher_id VARCHAR(64),
+                    room VARCHAR(30),
+                    locked BOOLEAN NOT NULL DEFAULT FALSE,
+                    UNIQUE (slot_id, day_of_week, section_id)
+                )
+                """
+            )
+        )
+
+
 def migrate_institute_posts(engine: Engine) -> None:
     with engine.begin() as conn:
         conn.execute(
@@ -392,6 +491,111 @@ def seed_default_branches(db: Session) -> None:
             added = True
     if added:
         db.commit()
+
+
+def migrate_mvp_domains(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                ALTER TABLE institute_posts
+                ADD COLUMN IF NOT EXISTS audience VARCHAR(32) NOT NULL DEFAULT 'everyone';
+                ALTER TABLE institute_posts
+                ADD COLUMN IF NOT EXISTS target_section_ids TEXT NOT NULL DEFAULT '';
+                CREATE TABLE IF NOT EXISTS institute_calendar_events (
+                    id VARCHAR(36) PRIMARY KEY,
+                    institute_id VARCHAR(36) NOT NULL REFERENCES institutes(id),
+                    branch_id VARCHAR(36) REFERENCES branches(id),
+                    title VARCHAR(200) NOT NULL,
+                    description TEXT NOT NULL DEFAULT '',
+                    event_date DATE NOT NULL,
+                    created_by VARCHAR(64) NOT NULL,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                );
+                CREATE TABLE IF NOT EXISTS exams (
+                    id VARCHAR(36) PRIMARY KEY,
+                    institute_id VARCHAR(36) NOT NULL REFERENCES institutes(id),
+                    academic_year_id VARCHAR(36) REFERENCES academic_years(id),
+                    section_id VARCHAR(36) REFERENCES sections(id),
+                    subject_id VARCHAR(36) REFERENCES subjects(id),
+                    name VARCHAR(200) NOT NULL,
+                    max_marks INTEGER NOT NULL DEFAULT 100,
+                    scheduled_at DATE,
+                    status VARCHAR(16) NOT NULL DEFAULT 'draft',
+                    created_by VARCHAR(64) NOT NULL,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                );
+                CREATE TABLE IF NOT EXISTS mark_entries (
+                    id VARCHAR(36) PRIMARY KEY,
+                    exam_id VARCHAR(36) NOT NULL REFERENCES exams(id),
+                    student_id VARCHAR(64) NOT NULL,
+                    subject_id VARCHAR(36) REFERENCES subjects(id),
+                    marks_obtained INTEGER,
+                    remarks VARCHAR(500) NOT NULL DEFAULT '',
+                    UNIQUE (exam_id, student_id, subject_id)
+                );
+                CREATE TABLE IF NOT EXISTS fee_structures (
+                    id VARCHAR(36) PRIMARY KEY,
+                    institute_id VARCHAR(36) NOT NULL REFERENCES institutes(id),
+                    academic_year_id VARCHAR(36) REFERENCES academic_years(id),
+                    name VARCHAR(200) NOT NULL,
+                    amount_paise INTEGER NOT NULL,
+                    UNIQUE (institute_id, academic_year_id, name)
+                );
+                CREATE TABLE IF NOT EXISTS student_fees (
+                    id VARCHAR(36) PRIMARY KEY,
+                    institute_id VARCHAR(36) NOT NULL REFERENCES institutes(id),
+                    student_id VARCHAR(64) NOT NULL,
+                    fee_structure_id VARCHAR(36) NOT NULL REFERENCES fee_structures(id),
+                    amount_paise INTEGER NOT NULL,
+                    paid_paise INTEGER NOT NULL DEFAULT 0,
+                    UNIQUE (institute_id, student_id, fee_structure_id)
+                );
+                CREATE TABLE IF NOT EXISTS payments (
+                    id VARCHAR(36) PRIMARY KEY,
+                    institute_id VARCHAR(36) NOT NULL REFERENCES institutes(id),
+                    student_id VARCHAR(64) NOT NULL,
+                    amount_paise INTEGER NOT NULL,
+                    method VARCHAR(32) NOT NULL DEFAULT 'cash',
+                    reference VARCHAR(200) NOT NULL DEFAULT '',
+                    receipt_number VARCHAR(64) NOT NULL,
+                    recorded_by VARCHAR(64) NOT NULL,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                );
+                """
+            )
+        )
+
+
+def migrate_parent_guardian_messaging(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS guardian_link_cache (
+                    guardian_user_id VARCHAR(64) PRIMARY KEY,
+                    student_ids_json TEXT NOT NULL DEFAULT '[]',
+                    expires_at TIMESTAMPTZ NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS parent_teacher_threads (
+                    id VARCHAR(36) PRIMARY KEY,
+                    institute_id VARCHAR(36) NOT NULL REFERENCES institutes(id),
+                    student_id VARCHAR(64) NOT NULL,
+                    subject VARCHAR(200) NOT NULL,
+                    created_by_user_id VARCHAR(64) NOT NULL,
+                    status VARCHAR(16) NOT NULL DEFAULT 'open',
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                );
+                CREATE TABLE IF NOT EXISTS parent_teacher_messages (
+                    id VARCHAR(36) PRIMARY KEY,
+                    thread_id VARCHAR(36) NOT NULL REFERENCES parent_teacher_threads(id),
+                    sender_user_id VARCHAR(64) NOT NULL,
+                    body TEXT NOT NULL,
+                    sent_at TIMESTAMPTZ DEFAULT NOW()
+                );
+                """
+            )
+        )
 
 
 def seed_default_activities(db: Session) -> None:

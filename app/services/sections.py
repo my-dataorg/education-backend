@@ -170,6 +170,54 @@ def delete_section(db: Session, institute_id: str, section_id: str) -> None:
     db.commit()
 
 
+def bulk_assign_section_members(
+    db: Session,
+    section_id: str,
+    members: list[dict],
+) -> dict:
+    added = 0
+    skipped: list[dict] = []
+    for item in members:
+        try:
+            assign_section_member(db, section_id, item["userId"], item["memberType"])
+            added += 1
+        except ValueError as error:
+            skipped.append({"userId": item["userId"], "reason": str(error)})
+    return {"added": added, "skipped": skipped}
+
+
+def transfer_student_enrollment(
+    db: Session,
+    institute_id: str,
+    student_id: str,
+    to_section_id: str,
+    reason: str = "",
+) -> dict:
+    to_section = db.get(Section, to_section_id)
+    if not to_section or to_section.institute_id != institute_id:
+        raise ValueError("Section not found")
+
+    from_section_id = db.scalar(
+        select(SectionMember.section_id)
+        .join(Section, Section.id == SectionMember.section_id)
+        .where(
+            Section.institute_id == institute_id,
+            SectionMember.user_id == student_id,
+            SectionMember.member_type == "student",
+        )
+    )
+    if from_section_id == to_section_id:
+        raise ValueError("Student is already in this section")
+
+    assign_section_member(db, to_section_id, student_id, "student")
+    return {
+        "studentId": student_id,
+        "fromSectionId": from_section_id,
+        "toSectionId": to_section_id,
+        "reason": reason,
+    }
+
+
 def remove_section_member(db: Session, section_id: str, user_id: str) -> None:
     db.execute(
         delete(SectionSubjectStudentAssignment).where(

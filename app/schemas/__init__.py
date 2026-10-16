@@ -92,6 +92,121 @@ class MemberProfileOut(BaseModel):
     branches: list[str]
 
 
+class MembersRosterItemOut(BaseModel):
+    id: str
+    userId: str | None = None
+    role: str | None = None
+    kind: str | None = None
+    memberType: str | None = None
+    status: str | None = None
+    className: str | None = None
+    sectionName: str | None = None
+    firstName: str = ""
+    lastName: str = ""
+    displayName: str = ""
+    email: str = ""
+    username: str = ""
+    message: str | None = None
+    requestedAt: str | None = None
+    invitedAt: str | None = None
+
+
+class MembersRosterTabCountsOut(BaseModel):
+    all: int
+    staff: int
+    students: int
+    parents: int
+    requests: int
+    invitations: int
+
+
+class MembersRosterOut(BaseModel):
+    items: list[MembersRosterItemOut]
+    total: int
+    tabCounts: MembersRosterTabCountsOut
+
+
+class JoinCodeRegenerateOut(BaseModel):
+    joinCode: str
+
+
+class SubjectTeacherColumnOut(BaseModel):
+    subjectId: str
+    name: str
+    offeredIn: list[str] = Field(default_factory=list)
+
+
+class SubjectTeacherCellOut(BaseModel):
+    subjectId: str
+    teacherId: str | None = None
+    teacherName: str | None = None
+    periodsPerWeek: int | None = None
+    isGraded: bool = False
+    sectionLabels: list[str] | None = None
+
+
+class SubjectTeacherMatrixRowOut(BaseModel):
+    sectionId: str | None = None
+    classId: str | None = None
+    teacherId: str | None = None
+    label: str
+    cells: list[SubjectTeacherCellOut]
+
+
+class SubjectTeacherMatrixOut(BaseModel):
+    columns: list[SubjectTeacherColumnOut]
+    rows: list[SubjectTeacherMatrixRowOut]
+
+
+class SubjectTeacherPanelSubjectOut(BaseModel):
+    subjectId: str
+    name: str
+    sectionsCount: int
+
+
+class SubjectTeacherPanelItemOut(BaseModel):
+    personId: str
+    name: str = ""
+    subjects: list[SubjectTeacherPanelSubjectOut]
+    periodsPerWeek: int
+    weeklyLimit: int
+    classTeacherOf: list[str] = Field(default_factory=list)
+
+
+class SubjectTeacherPanelOut(BaseModel):
+    items: list[SubjectTeacherPanelItemOut]
+
+
+class SubjectTeacherChecksOut(BaseModel):
+    unassignedCount: int
+    overLimitCount: int
+    noClassCount: int
+    unassignedCells: list[dict]
+    overLimitTeachers: list[str]
+    noClassTeachers: list[str]
+
+
+class SubjectTeacherCopyIn(BaseModel):
+    sourceSectionId: str
+    targetSectionIds: list[str] = Field(min_length=1)
+    replaceExisting: bool = False
+
+
+class SubjectTeacherCopyOut(BaseModel):
+    changes: list[dict]
+    changeCount: int
+
+
+class SubjectTeacherAssignmentSaveIn(BaseModel):
+    sectionId: str
+    subjectId: str
+    teacherId: str | None = None
+
+
+class SubjectTeacherAssignmentsSaveIn(BaseModel):
+    assignments: list[SubjectTeacherAssignmentSaveIn]
+
+
 class BranchTeacherBrief(BaseModel):
     userId: str
     role: str
@@ -351,6 +466,40 @@ class ActivityOut(BaseModel):
 
 class SectionSubjectAssign(BaseModel):
     subjectId: str
+    weeklyPeriods: int | None = Field(default=None, ge=1, le=40)
+
+
+class SectionMemberBulkItem(BaseModel):
+    userId: str
+    memberType: str = Field(pattern="^(teacher|student)$")
+
+
+class SectionMemberBulkIn(BaseModel):
+    members: list[SectionMemberBulkItem] = Field(min_length=1, max_length=100)
+
+
+class SectionMemberBulkSkipped(BaseModel):
+    userId: str
+    reason: str
+
+
+class SectionMemberBulkOut(BaseModel):
+    added: int
+    skipped: list[SectionMemberBulkSkipped] = Field(default_factory=list)
+
+
+class EnrollmentTransferIn(BaseModel):
+    studentId: str
+    toSectionId: str
+    reason: str = Field(default="", max_length=500)
+    effectiveDate: date | None = None
+
+
+class EnrollmentTransferOut(BaseModel):
+    studentId: str
+    fromSectionId: str | None = None
+    toSectionId: str
+    reason: str = ""
 
 
 class TeacherSubjectAssign(BaseModel):
@@ -372,8 +521,13 @@ class StudentSubjectOut(BaseModel):
 class SectionSubjectOut(BaseModel):
     id: str
     name: str
+    weeklyPeriods: int | None = None
     teachers: list[TeacherSubjectOut] = Field(default_factory=list)
     students: list[StudentSubjectOut] = Field(default_factory=list)
+
+
+class SectionSubjectWeeklyPeriodsPatch(BaseModel):
+    weeklyPeriods: int | None = Field(default=None, ge=1, le=40)
 
 
 class ScheduleSettingsOut(BaseModel):
@@ -401,6 +555,8 @@ class TimetableEntryOut(BaseModel):
     sectionId: str
     subjectId: str
     teacherId: str | None = None
+    room: str | None = None
+    locked: bool = False
 
 
 class SpecialDayActivityOut(BaseModel):
@@ -424,6 +580,9 @@ class SpecialDayOut(BaseModel):
 class ScheduleOut(BaseModel):
     instituteId: str
     revision: int
+    publishedAt: datetime | None = None
+    draftSavedAt: datetime | None = None
+    changedSincePublish: bool = False
     settings: ScheduleSettingsOut
     slots: list[ScheduleSlotOut]
     entries: list[TimetableEntryOut]
@@ -464,6 +623,165 @@ class TimetableEntryIn(BaseModel):
     sectionId: str
     subjectId: str
     teacherId: str | None = None
+    room: str | None = Field(default=None, max_length=30)
+    locked: bool = False
+
+
+class TimetablePeriodOut(BaseModel):
+    periodNo: int
+    slotId: str
+    start: str
+    end: str
+    kind: str
+
+
+class TimetableDayOut(BaseModel):
+    day: int
+    isWorking: bool
+    halfDay: bool = False
+
+
+class TimetableCellOut(BaseModel):
+    day: int
+    periodNo: int
+    slotId: str
+    sectionId: str
+    subjectId: str
+    subjectName: str = ""
+    teacherId: str | None = None
+    teacherName: str = ""
+    room: str | None = None
+    locked: bool = False
+    status: str
+    clashReason: str | None = None
+
+
+class TimetableOut(BaseModel):
+    view: str
+    itemId: str | None = None
+    state: str
+    periods: list[TimetablePeriodOut]
+    days: list[TimetableDayOut]
+    cells: list[TimetableCellOut]
+    draftSavedAt: datetime | None = None
+    publishedAt: datetime | None = None
+    changedSincePublish: bool = False
+
+
+class TimetableCellPatch(BaseModel):
+    sectionId: str
+    dayOfWeek: int = Field(ge=1, le=7)
+    slotId: str
+    subjectId: str | None = None
+    teacherId: str | None = None
+    room: str | None = Field(default=None, max_length=30)
+    locked: bool | None = None
+    clear: bool = False
+
+
+class TimetableClashOut(BaseModel):
+    clashId: str
+    type: str
+    day: int
+    periodNo: int
+    sectionIds: list[str]
+    teacherId: str | None = None
+    room: str | None = None
+    message: str
+
+
+class TimetableClashesOut(BaseModel):
+    items: list[TimetableClashOut]
+
+
+class TimetableTeacherLoadItemOut(BaseModel):
+    teacherId: str
+    name: str = ""
+    subject: str
+    periodsUsed: int
+    periodsNeeded: int | None = None
+
+
+class TimetableTeacherLoadOut(BaseModel):
+    items: list[TimetableTeacherLoadItemOut]
+
+
+class TimetablePublishOut(BaseModel):
+    publishedAt: datetime
+    cellCount: int
+    changedSincePublish: bool = False
+
+
+class TimetableAutoFillProposal(BaseModel):
+    sectionId: str
+    dayOfWeek: int = Field(ge=1, le=7)
+    slotId: str
+    periodNo: int | None = None
+    subjectId: str
+    subjectName: str = ""
+    teacherId: str | None = None
+    selected: bool = True
+
+
+class TimetableAutoFillIn(BaseModel):
+    accept: bool = False
+    sectionIds: list[str] = Field(default_factory=list)
+    campusId: str | None = None
+    proposed: list[TimetableAutoFillProposal] = Field(default_factory=list)
+
+
+class TimetableAutoFillOut(BaseModel):
+    proposedCount: int = 0
+    needsDecisionCount: int = 0
+    proposed: list[TimetableAutoFillProposal] = Field(default_factory=list)
+    couldNotFill: list[dict] = Field(default_factory=list)
+    appliedCount: int | None = None
+
+
+class TimetableSubstitutionPeriodOut(BaseModel):
+    sectionId: str
+    slotId: str
+    periodNo: int
+    substituteTeacherId: str | None = None
+    substitutionId: str | None = None
+
+
+class TimetableSubstitutionItemOut(BaseModel):
+    teacherId: str
+    note: str = ""
+    periods: list[TimetableSubstitutionPeriodOut] = Field(default_factory=list)
+
+
+class TimetableSubstitutionsOut(BaseModel):
+    date: date
+    items: list[TimetableSubstitutionItemOut] = Field(default_factory=list)
+    savedCount: int | None = None
+
+
+class TimetableSubstitutionSaveIn(BaseModel):
+    date: date
+    substitutions: list[dict] = Field(min_length=1)
+
+
+class SpecialDayListItemOut(BaseModel):
+    specialDayId: str
+    date: date
+    name: str
+    sections: list[str] = Field(default_factory=list)
+    teacherIds: list[str] = Field(default_factory=list)
+    replacesRegularSchedule: bool = True
+
+
+class SpecialDayListOut(BaseModel):
+    items: list[SpecialDayListItemOut] = Field(default_factory=list)
+
+
+class InstituteRoleSettingsOut(BaseModel):
+    principalCanEditTimetable: bool = True
+
+
+class InstituteRoleSettingsUpdate(BaseModel):
+    principalCanEditTimetable: bool | None = None
 
 
 class SpecialDayActivityIn(BaseModel):
@@ -566,6 +884,8 @@ class NoteOut(BaseModel):
 class InstitutePostCreate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     body: str = Field(min_length=1, max_length=5000)
+    audience: str = Field(default="everyone", pattern="^(everyone|staff|students|parents|class)$")
+    targetSectionIds: list[str] = Field(default_factory=list)
 
 
 class InstitutePostOut(BaseModel):
@@ -573,7 +893,135 @@ class InstitutePostOut(BaseModel):
     title: str
     body: str
     postedBy: str
+    audience: str = "everyone"
+    targetSectionIds: list[str] = Field(default_factory=list)
     createdAt: datetime
+
+
+class CalendarEventCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    description: str = ""
+    eventDate: date
+    branchId: str | None = None
+
+
+class CalendarEventOut(BaseModel):
+    id: str
+    title: str
+    description: str
+    eventDate: date
+    branchId: str | None
+    createdBy: str
+    createdAt: datetime
+
+
+class ExamCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    academicYearId: str | None = None
+    sectionId: str | None = None
+    subjectId: str | None = None
+    maxMarks: int = Field(default=100, ge=1)
+    scheduledAt: date | None = None
+
+
+class ExamUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    sectionId: str | None = None
+    subjectId: str | None = None
+    maxMarks: int | None = Field(default=None, ge=1)
+    scheduledAt: date | None = None
+
+
+class ExamOut(BaseModel):
+    id: str
+    instituteId: str
+    academicYearId: str | None
+    sectionId: str | None
+    subjectId: str | None
+    name: str
+    maxMarks: int
+    scheduledAt: date | None
+    status: str
+    createdBy: str
+    createdAt: datetime
+
+
+class MarkEntryIn(BaseModel):
+    studentId: str
+    subjectId: str | None = None
+    marksObtained: int | None = None
+    remarks: str = ""
+
+
+class MarksUpsert(BaseModel):
+    entries: list[MarkEntryIn]
+
+
+class MarkEntryOut(BaseModel):
+    id: str
+    examId: str
+    studentId: str
+    subjectId: str | None
+    marksObtained: int | None
+    remarks: str
+
+
+class FeeStructureCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    amountPaise: int = Field(ge=1)
+    academicYearId: str | None = None
+
+
+class FeeStructureOut(BaseModel):
+    id: str
+    instituteId: str
+    academicYearId: str | None
+    name: str
+    amountPaise: int
+
+
+class StudentFeeAssign(BaseModel):
+    studentId: str
+    feeStructureId: str
+    amountPaise: int | None = None
+
+
+class StudentFeeDueOut(BaseModel):
+    studentId: str
+    feeStructureId: str
+    amountPaise: int
+    paidPaise: int
+    balancePaise: int
+
+
+class PaymentCreate(BaseModel):
+    studentId: str
+    amountPaise: int = Field(ge=1)
+    method: str = Field(default="cash", pattern="^(cash|upi|bank)$")
+    reference: str = ""
+
+
+class PaymentOut(BaseModel):
+    id: str
+    instituteId: str
+    studentId: str
+    amountPaise: int
+    method: str
+    reference: str
+    receiptNumber: str
+    recordedBy: str
+    createdAt: datetime
+
+
+class AttendanceSummaryOut(BaseModel):
+    studentsTotal: int
+    present: int
+    absent: int
+    late: int
+    staffTotal: int
+    staffPresent: int
+    sectionsTotal: int
+    sectionsPending: int
 
 
 class AssignmentCreate(BaseModel):
@@ -616,3 +1064,39 @@ class SubmissionOut(BaseModel):
     id: str
     content: str
     studentId: str
+
+
+class GuardianChildOut(BaseModel):
+    studentId: str
+    instituteIds: list[str]
+
+
+class GuardianChildrenOut(BaseModel):
+    children: list[GuardianChildOut]
+
+
+class ParentThreadCreate(BaseModel):
+    subject: str = Field(min_length=1, max_length=200)
+    initialMessage: str | None = None
+
+
+class ParentThreadOut(BaseModel):
+    id: str
+    instituteId: str
+    studentId: str
+    subject: str
+    status: str
+    createdByUserId: str
+    createdAt: datetime
+
+
+class ParentMessageCreate(BaseModel):
+    body: str = Field(min_length=1)
+
+
+class ParentMessageOut(BaseModel):
+    id: str
+    threadId: str
+    senderUserId: str
+    body: str
+    sentAt: datetime

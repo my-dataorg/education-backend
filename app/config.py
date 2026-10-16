@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     keycloak_admin_user: str = "admin"
     keycloak_admin_password: str = "admin"
     subscriptions_api_url: str = "http://127.0.0.1:8002"
+    social_api_url: str = ""
     platform_internal_token: str = "mydata-internal-dev-token"
     auth_issuer: str = "http://localhost:8002/v1/auth"
     use_platform_auth: bool = True

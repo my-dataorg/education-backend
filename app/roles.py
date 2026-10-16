@@ -1,4 +1,5 @@
 MANAGE_ROLES = frozenset({"owner", "admin"})
+TIMETABLE_EDIT_ROLES = frozenset({"owner", "admin", "principal"})
 JOIN_REQUEST_ROLES = frozenset({"teacher", "lecturer", "professor", "student", "parent"})
 STAFF_ROLES = frozenset({"owner", "admin", "principal", "teacher", "lecturer", "professor"})
 TEACHING_STAFF_ROLES = frozenset({"principal", "teacher", "lecturer", "professor"})
@@ -7,7 +8,8 @@ VIEW_DIRECTORY_ROLES = STAFF_ROLES
 
 STAFF_MANAGEABLE_ROLES = frozenset({"admin", "principal", "teacher", "lecturer", "professor"})
 STUDENT_ROLE = "student"
-ALL_ASSIGNABLE_ROLES = STAFF_MANAGEABLE_ROLES | {STUDENT_ROLE}
+PARENT_ROLE = "parent"
+ALL_ASSIGNABLE_ROLES = STAFF_MANAGEABLE_ROLES | {STUDENT_ROLE, PARENT_ROLE}
 INVITATION_ROLES = frozenset({"teacher", STUDENT_ROLE, "parent"})
 
 ROLE_LABELS = {

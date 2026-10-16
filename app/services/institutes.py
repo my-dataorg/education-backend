@@ -10,6 +10,7 @@ from app.models import (
     Institute,
     InstituteInvitation,
     InstituteMember,
+    InstituteRoleSettings,
     ScheduleSettings,
     ScheduleSlot,
     Section,
@@ -59,6 +60,36 @@ def require_directory_view(db: Session, institute_id: str, user_id: str) -> Inst
     if member.role not in VIEW_DIRECTORY_ROLES:
         raise PermissionError("Staff access required")
     return member
+
+
+def _role_settings(db: Session, institute_id: str) -> InstituteRoleSettings:
+    settings = db.get(InstituteRoleSettings, institute_id)
+    if not settings:
+        settings = InstituteRoleSettings(institute_id=institute_id)
+        db.add(settings)
+        db.commit()
+        db.refresh(settings)
+    return settings
+
+
+def principal_can_edit_timetable(db: Session, institute_id: str) -> bool:
+    return _role_settings(db, institute_id).principal_can_edit_timetable
+
+
+def require_timetable_edit(db: Session, institute_id: str, user_id: str) -> InstituteMember:
+    member = require_membership(db, institute_id, user_id)
+    if member.role in MANAGE_ROLES:
+        return member
+    if member.role == "principal" and principal_can_edit_timetable(db, institute_id):
+        return member
+    raise PermissionError("Owner, admin, or principal with timetable permission required")
+
+
+def require_timetable_view(db: Session, institute_id: str, user_id: str) -> InstituteMember:
+    member = require_membership(db, institute_id, user_id)
+    if member.role in MANAGE_ROLES or member.role == "principal":
+        return member
+    raise PermissionError("Owner, admin, or principal role required")
 
 
 def list_user_institutes(db: Session, user_id: str) -> list[Institute]:

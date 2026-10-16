@@ -1,12 +1,14 @@
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_user, require_education_subscription
+from app.roles import MANAGE_ROLES
 from app.config import settings
 from app.db.migrate import (
     migrate_invitations,
@@ -19,6 +21,11 @@ from app.db.migrate import (
     migrate_institute_posts,
     migrate_academic_years,
     migrate_subjects,
+    migrate_timetable_publish,
+    migrate_institute_role_settings,
+    migrate_timetable_substitutions,
+    migrate_mvp_domains,
+    migrate_parent_guardian_messaging,
     run_migrations,
     seed_default_activities,
     seed_default_branches,
@@ -34,9 +41,10 @@ from app.models import (
     Institute,
     InstituteJoinRequest,
     InstituteMember,
-    InstitutePost,
     Section,
     SectionMember,
+    SectionSubject,
+    Subject,
     Submission,
     new_join_code,
 )
@@ -58,6 +66,20 @@ from app.schemas import (
     InstituteSummaryOut,
     InstitutePostCreate,
     InstitutePostOut,
+    CalendarEventCreate,
+    CalendarEventOut,
+    ExamCreate,
+    ExamUpdate,
+    ExamOut,
+    MarksUpsert,
+    MarkEntryOut,
+    FeeStructureCreate,
+    FeeStructureOut,
+    StudentFeeAssign,
+    StudentFeeDueOut,
+    PaymentCreate,
+    PaymentOut,
+    AttendanceSummaryOut,
     AcademicTermOut,
     AcademicYearOut,
     AcademicYearUpdate,
@@ -71,20 +93,46 @@ from app.schemas import (
     JoinRequestRespondOut,
     InstituteLookupOut,
     MemberAdd,
+    MembersRosterOut,
     MemberOut,
     MemberProfileOut,
     MemberRoleUpdate,
+    JoinCodeRegenerateOut,
+    SubjectTeacherMatrixOut,
+    SubjectTeacherPanelOut,
+    SubjectTeacherChecksOut,
+    SubjectTeacherCopyIn,
+    SubjectTeacherCopyOut,
+    SubjectTeacherAssignmentsSaveIn,
     NoteCreate,
     NoteOut,
     SectionCreate,
     SectionSubjectAssign,
     SectionSubjectOut,
+    SectionSubjectWeeklyPeriodsPatch,
+    InstituteRoleSettingsOut,
+    InstituteRoleSettingsUpdate,
+    TimetableAutoFillIn,
+    TimetableAutoFillOut,
+    TimetableSubstitutionsOut,
+    TimetableSubstitutionSaveIn,
+    SpecialDayListOut,
+    SpecialDayIn,
     SectionEnrollmentOut,
     SectionMemberAssign,
+    SectionMemberBulkIn,
+    SectionMemberBulkOut,
+    EnrollmentTransferIn,
+    EnrollmentTransferOut,
     SectionOut,
     SectionOverviewOut,
     ScheduleOut,
     ScheduleUpdate,
+    TimetableCellPatch,
+    TimetableClashesOut,
+    TimetableOut,
+    TimetablePublishOut,
+    TimetableTeacherLoadOut,
     TeacherAbsenceCreate,
     TeacherAbsenceOut,
     SubjectCreate,
@@ -96,6 +144,12 @@ from app.schemas import (
     TeacherSubjectAssign,
     TeacherSubjectOut,
     UserSearchOut,
+    GuardianChildrenOut,
+    GuardianChildOut,
+    ParentThreadCreate,
+    ParentThreadOut,
+    ParentMessageCreate,
+    ParentMessageOut,
 )
 from app.services.institutes import (
     ADMIN_ROLES,
@@ -116,13 +170,24 @@ from app.services.institutes import (
     require_directory_view,
     require_manage,
     require_membership,
+    require_timetable_edit,
+    require_timetable_view,
     require_owner,
     update_branch,
 )
 from app.services.academic_years import get_or_create_active, terms, update_active
+from app.services.members_roster import export_members_csv, list_members_roster, regenerate_institute_join_code
+from app.services.subject_teachers import (
+    apply_subject_teacher_assignments,
+    copy_subject_teachers,
+    get_subject_teacher_checks,
+    get_subject_teacher_matrix,
+    list_subject_teacher_panel,
+)
 from app.services.overview import get_owner_overview
 from app.services.sections import (
     assign_section_member,
+    bulk_assign_section_members,
     delete_section,
     get_section_overview,
     get_student_attendance,
@@ -131,11 +196,29 @@ from app.services.sections import (
     list_member_sections,
     list_my_enrolled_sections,
     remove_section_member,
+    transfer_student_enrollment,
     require_section_access,
     require_section_student,
     require_section_teacher,
 )
 from app.services.schedule import get_schedule, replace_schedule
+from app.services.timetable import (
+    accept_auto_fill,
+    get_timetable,
+    list_clashes,
+    list_substitutions,
+    patch_cell,
+    preview_auto_fill,
+    publish_timetable,
+    save_substitutions,
+    teacher_load,
+)
+from app.services.special_days import (
+    create_special_day,
+    delete_special_day,
+    list_special_days,
+)
+from app.services.role_settings import get_role_settings, update_role_settings
 from app.services.teacher_coverage import (
     list_absences,
     remove_absence,
@@ -169,11 +252,19 @@ from app.services.subjects import (
     link_subject,
     list_section_subjects,
     list_subjects,
+    update_section_subject_weekly_periods,
     unlink_subject,
     unassign_teacher,
     unassign_student as unassign_subject_student,
 )
 from app.services.user_identity import enrich_rows, identity_for_user
+from app.services import exams as exam_service
+from app.services import fees as fee_service
+from app.services.attendance_summary import get_attendance_summary
+from app.services import notices as notice_service
+from app.services import reports as report_service
+from app.services.guardians import list_guardian_children
+from app.services import parent_messaging
 
 User = dict
 
@@ -192,6 +283,11 @@ async def lifespan(_: FastAPI):
     migrate_teacher_workspace(engine)
     migrate_institute_posts(engine)
     migrate_academic_years(engine)
+    migrate_timetable_publish(engine)
+    migrate_institute_role_settings(engine)
+    migrate_timetable_substitutions(engine)
+    migrate_mvp_domains(engine)
+    migrate_parent_guardian_messaging(engine)
     with SessionLocal() as db:
         seed_default_branches(db)
         seed_default_activities(db)
@@ -446,6 +542,94 @@ def get_members(
     members = list_members(db, institute_id, group)
     rows = [{"userId": m.user_id, "role": m.role} for m in members]
     return [MemberOut(**row) for row in enrich_rows(rows)]
+
+
+@app.get("/v1/institutes/{institute_id}/members/roster", response_model=MembersRosterOut)
+def get_members_roster(
+    institute_id: str,
+    tab: str | None = None,
+    q: str | None = None,
+    page: int = 1,
+    pageSize: int = 25,
+    role: str | None = None,
+    status: str | None = None,
+    class_name: str | None = Query(None, alias="class"),
+    section: str | None = None,
+    campus_id: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_timetable_view(db, institute_id, user["id"])
+        data = list_members_roster(
+            db,
+            institute_id,
+            tab=tab,
+            q=q,
+            page=page,
+            page_size=pageSize,
+            role=role,
+            status=status,
+            class_name=class_name,
+            section_name=section,
+            campus_id=campus_id,
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return MembersRosterOut(**data)
+
+
+@app.get("/v1/institutes/{institute_id}/members/export")
+def export_members(
+    institute_id: str,
+    tab: str | None = None,
+    q: str | None = None,
+    role: str | None = None,
+    status: str | None = None,
+    class_name: str | None = Query(None, alias="class"),
+    section: str | None = None,
+    campus_id: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_timetable_view(db, institute_id, user["id"])
+        csv_body = export_members_csv(
+            db,
+            institute_id,
+            tab=tab,
+            q=q,
+            role=role,
+            status=status,
+            class_name=class_name,
+            section_name=section,
+            campus_id=campus_id,
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    return Response(
+        content=csv_body,
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="members.csv"'},
+    )
+
+
+@app.post("/v1/institutes/{institute_id}/join-code/regenerate", response_model=JoinCodeRegenerateOut)
+def regenerate_join_code(
+    institute_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_owner(db, institute_id, user["id"])
+        inst = regenerate_institute_join_code(db, institute_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return JoinCodeRegenerateOut(joinCode=inst.join_code)
 
 
 @app.get("/v1/institutes/{institute_id}/members/{member_user_id}/profile", response_model=MemberProfileOut)
@@ -733,7 +917,7 @@ def get_branches(
     user: User = Depends(require_education_subscription),
 ):
     try:
-        require_owner(db, institute_id, user["id"])
+        require_membership(db, institute_id, user["id"])
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     branches = list_branches(db, institute_id)
@@ -871,24 +1055,10 @@ def list_posts(
     user: User = Depends(require_education_subscription),
 ):
     try:
-        require_membership(db, institute_id, user["id"])
+        rows = notice_service.list_posts_for_user(db, institute_id, user["id"])
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
-    rows = db.scalars(
-        select(InstitutePost)
-        .where(InstitutePost.institute_id == institute_id)
-        .order_by(InstitutePost.created_at.desc())
-    )
-    return [
-        InstitutePostOut(
-            id=row.id,
-            title=row.title,
-            body=row.body,
-            postedBy=row.posted_by,
-            createdAt=row.created_at,
-        )
-        for row in rows
-    ]
+    return [InstitutePostOut(**notice_service.post_to_dict(row)) for row in rows]
 
 
 @app.post("/v1/institutes/{institute_id}/posts", response_model=InstitutePostOut, status_code=201)
@@ -899,25 +1069,18 @@ def create_post(
     user: User = Depends(require_education_subscription),
 ):
     try:
-        require_manage(db, institute_id, user["id"])
+        row = notice_service.create_post(
+            db,
+            institute_id,
+            user["id"],
+            body.title,
+            body.body,
+            body.audience,
+            body.targetSectionIds,
+        )
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
-    row = InstitutePost(
-        institute_id=institute_id,
-        title=body.title,
-        body=body.body,
-        posted_by=user["id"],
-    )
-    db.add(row)
-    db.commit()
-    db.refresh(row)
-    return InstitutePostOut(
-        id=row.id,
-        title=row.title,
-        body=row.body,
-        postedBy=row.posted_by,
-        createdAt=row.created_at,
-    )
+    return InstitutePostOut(**notice_service.post_to_dict(row))
 
 
 @app.get("/v1/institutes/{institute_id}/schedule", response_model=ScheduleOut)
@@ -949,6 +1112,350 @@ def update_schedule(
         raise HTTPException(status_code=409, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.get(
+    "/v1/institutes/{institute_id}/subject-teachers",
+    response_model=SubjectTeacherMatrixOut,
+)
+def read_subject_teacher_matrix(
+    institute_id: str,
+    show: str = "class",
+    campus_id: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_timetable_view(db, institute_id, user["id"])
+        data = get_subject_teacher_matrix(db, institute_id, campus_id=campus_id, show=show)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    return SubjectTeacherMatrixOut(**data)
+
+
+@app.get(
+    "/v1/institutes/{institute_id}/subject-teachers/teachers",
+    response_model=SubjectTeacherPanelOut,
+)
+def read_subject_teacher_panel(
+    institute_id: str,
+    campus_id: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_timetable_view(db, institute_id, user["id"])
+        data = list_subject_teacher_panel(db, institute_id, campus_id=campus_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    return SubjectTeacherPanelOut(**data)
+
+
+@app.get(
+    "/v1/institutes/{institute_id}/subject-teachers/checks",
+    response_model=SubjectTeacherChecksOut,
+)
+def read_subject_teacher_checks(
+    institute_id: str,
+    campus_id: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_timetable_view(db, institute_id, user["id"])
+        data = get_subject_teacher_checks(db, institute_id, campus_id=campus_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    return SubjectTeacherChecksOut(**data)
+
+
+@app.post(
+    "/v1/institutes/{institute_id}/subject-teachers/copy",
+    response_model=SubjectTeacherCopyOut,
+)
+def copy_subject_teacher_assignments(
+    institute_id: str,
+    body: SubjectTeacherCopyIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_timetable_edit(db, institute_id, user["id"])
+        data = copy_subject_teachers(
+            db,
+            institute_id,
+            source_section_id=body.sourceSectionId,
+            target_section_ids=body.targetSectionIds,
+            replace_existing=body.replaceExisting,
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return SubjectTeacherCopyOut(**data)
+
+
+@app.put("/v1/institutes/{institute_id}/subject-teachers/assignments", status_code=204)
+def save_subject_teacher_assignments(
+    institute_id: str,
+    body: SubjectTeacherAssignmentsSaveIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_timetable_edit(db, institute_id, user["id"])
+        apply_subject_teacher_assignments(
+            db,
+            institute_id,
+            [item.model_dump() for item in body.assignments],
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.get("/v1/institutes/{institute_id}/timetable", response_model=TimetableOut)
+def read_timetable(
+    institute_id: str,
+    view: str = "class",
+    id: str | None = None,
+    state: str = "draft",
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_timetable_view(db, institute_id, user["id"])
+        return get_timetable(db, institute_id, view=view, item_id=id, state=state)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+
+
+@app.patch("/v1/institutes/{institute_id}/timetable/cells", response_model=TimetableOut)
+def update_timetable_cell(
+    institute_id: str,
+    body: TimetableCellPatch,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_timetable_edit(db, institute_id, user["id"])
+        return patch_cell(db, institute_id, body)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.get(
+    "/v1/institutes/{institute_id}/timetable/clashes",
+    response_model=TimetableClashesOut,
+)
+def read_timetable_clashes(
+    institute_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_timetable_view(db, institute_id, user["id"])
+        return list_clashes(db, institute_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+
+
+@app.get(
+    "/v1/institutes/{institute_id}/timetable/teacher-load",
+    response_model=TimetableTeacherLoadOut,
+)
+def read_timetable_teacher_load(
+    institute_id: str,
+    view: str = "class",
+    id: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_timetable_view(db, institute_id, user["id"])
+        if not id:
+            raise ValueError("id is required")
+        return teacher_load(db, institute_id, view=view, item_id=id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.post(
+    "/v1/institutes/{institute_id}/timetable/publish",
+    response_model=TimetablePublishOut,
+)
+def publish_institute_timetable(
+    institute_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_timetable_edit(db, institute_id, user["id"])
+        return publish_timetable(db, institute_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.post(
+    "/v1/institutes/{institute_id}/timetable/auto-fill",
+    response_model=TimetableAutoFillOut,
+)
+def timetable_auto_fill(
+    institute_id: str,
+    body: TimetableAutoFillIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_timetable_edit(db, institute_id, user["id"])
+        if body.accept:
+            result = accept_auto_fill(
+                db,
+                institute_id,
+                [item.model_dump() for item in body.proposed],
+            )
+            return TimetableAutoFillOut(appliedCount=result["appliedCount"])
+        preview = preview_auto_fill(
+            db,
+            institute_id,
+            section_ids=body.sectionIds or None,
+            campus_id=body.campusId,
+        )
+        return TimetableAutoFillOut(**preview)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.get(
+    "/v1/institutes/{institute_id}/timetable/substitutions",
+    response_model=TimetableSubstitutionsOut,
+)
+def read_timetable_substitutions(
+    institute_id: str,
+    substitution_date: date | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_timetable_view(db, institute_id, user["id"])
+        return list_substitutions(db, institute_id, substitution_date or date.today())
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+
+
+@app.post(
+    "/v1/institutes/{institute_id}/timetable/substitutions",
+    response_model=TimetableSubstitutionsOut,
+)
+def write_timetable_substitutions(
+    institute_id: str,
+    body: TimetableSubstitutionSaveIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_timetable_edit(db, institute_id, user["id"])
+        return save_substitutions(db, institute_id, body.date, body.substitutions)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.get(
+    "/v1/institutes/{institute_id}/special-days",
+    response_model=SpecialDayListOut,
+)
+def read_special_days(
+    institute_id: str,
+    year: str = "current",
+    campus_id: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_timetable_view(db, institute_id, user["id"])
+        return list_special_days(db, institute_id, year=year, campus_id=campus_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+
+
+@app.post(
+    "/v1/institutes/{institute_id}/special-days",
+    response_model=SpecialDayListOut,
+    status_code=201,
+)
+def add_special_day(
+    institute_id: str,
+    body: SpecialDayIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_timetable_edit(db, institute_id, user["id"])
+        item = create_special_day(db, institute_id, body)
+        return SpecialDayListOut(items=[item])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.delete("/v1/institutes/{institute_id}/special-days/{special_day_id}", status_code=204)
+def remove_special_day(
+    institute_id: str,
+    special_day_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_timetable_edit(db, institute_id, user["id"])
+        delete_special_day(db, institute_id, special_day_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@app.get(
+    "/v1/institutes/{institute_id}/role-settings",
+    response_model=InstituteRoleSettingsOut,
+)
+def read_role_settings(
+    institute_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_membership(db, institute_id, user["id"])
+        return get_role_settings(db, institute_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+
+
+@app.put(
+    "/v1/institutes/{institute_id}/role-settings",
+    response_model=InstituteRoleSettingsOut,
+)
+def write_role_settings(
+    institute_id: str,
+    body: InstituteRoleSettingsUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        return update_role_settings(db, institute_id, user["id"], body)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
 
 
 @app.get(
@@ -1176,11 +1683,45 @@ def get_section_subjects(
         SectionSubjectOut(
             id=row["id"],
             name=row["name"],
+            weeklyPeriods=row.get("weeklyPeriods"),
             teachers=[TeacherSubjectOut(userId=user_id) for user_id in row["teachers"]],
             students=[StudentSubjectOut(userId=user_id) for user_id in row["students"]],
         )
         for row in list_section_subjects(db, section_id)
     ]
+
+
+@app.patch(
+    "/v1/sections/{section_id}/subjects/{subject_id}",
+    response_model=SectionSubjectOut,
+)
+def patch_section_subject(
+    section_id: str,
+    subject_id: str,
+    body: SectionSubjectWeeklyPeriodsPatch,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        section = db.get(Section, section_id)
+        if not section:
+            raise ValueError("Section not found")
+        require_owner(db, section.institute_id, user["id"])
+        update_section_subject_weekly_periods(
+            db, section_id, subject_id, body.weeklyPeriods
+        )
+        subject = db.get(Subject, subject_id)
+        if not subject:
+            raise ValueError("Subject not found")
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return SectionSubjectOut(
+        id=subject.id,
+        name=subject.name,
+        weeklyPeriods=body.weeklyPeriods,
+    )
 
 
 @app.post("/v1/sections/{section_id}/subjects", response_model=SectionSubjectOut, status_code=201)
@@ -1195,12 +1736,23 @@ def add_section_subject(
         if not section:
             raise ValueError("Section not found")
         require_owner(db, section.institute_id, user["id"])
-        subject = link_subject(db, section_id, body.subjectId)
+        subject = link_subject(
+            db, section_id, body.subjectId, weekly_periods=body.weeklyPeriods
+        )
+        link = db.scalar(
+            select(SectionSubject).where(
+                SectionSubject.section_id == section_id,
+                SectionSubject.subject_id == body.subjectId,
+            )
+        )
+        weekly_periods = link.weekly_periods if link else body.weeklyPeriods
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
-    return SectionSubjectOut(id=subject.id, name=subject.name)
+    return SectionSubjectOut(
+        id=subject.id, name=subject.name, weeklyPeriods=weekly_periods
+    )
 
 
 @app.delete("/v1/sections/{section_id}/subjects/{subject_id}", status_code=204)
@@ -1387,6 +1939,60 @@ def assign_section_member_route(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return {"sectionId": section_id, "userId": row.user_id, "memberType": row.member_type}
+
+
+@app.post(
+    "/v1/sections/{section_id}/members/bulk",
+    response_model=SectionMemberBulkOut,
+    status_code=201,
+)
+def bulk_assign_section_members_route(
+    section_id: str,
+    body: SectionMemberBulkIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    section = db.get(Section, section_id)
+    if not section:
+        raise HTTPException(status_code=404, detail="Section not found")
+    try:
+        require_manage(db, section.institute_id, user["id"])
+        result = bulk_assign_section_members(
+            db,
+            section_id,
+            [item.model_dump() for item in body.members],
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    return SectionMemberBulkOut(**result)
+
+
+@app.post(
+    "/v1/institutes/{institute_id}/enrollments/transfer",
+    response_model=EnrollmentTransferOut,
+)
+def transfer_enrollment(
+    institute_id: str,
+    body: EnrollmentTransferIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        member = require_membership(db, institute_id, user["id"])
+        if member.role not in MANAGE_ROLES and member.role != "principal":
+            raise PermissionError("Owner or principal role required")
+        data = transfer_student_enrollment(
+            db,
+            institute_id,
+            body.studentId,
+            body.toSectionId,
+            body.reason,
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return EnrollmentTransferOut(**data)
 
 
 @app.delete("/v1/sections/{section_id}/members/{member_user_id}", status_code=204)
@@ -1730,3 +2336,460 @@ def submit_assignment(
         db.commit()
         db.refresh(sub)
     return SubmissionOut(id=sub.id, content=sub.content, studentId=sub.student_id)
+
+
+@app.get("/v1/institutes/{institute_id}/attendance/summary", response_model=AttendanceSummaryOut)
+def attendance_summary(
+    institute_id: str,
+    day: date | None = None,
+    campus_id: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        return get_attendance_summary(db, institute_id, user["id"], day or date.today(), campus_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+
+
+@app.get("/v1/institutes/{institute_id}/exams", response_model=list[ExamOut])
+def list_exams(
+    institute_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        return [ExamOut(**exam_service.exam_to_dict(row)) for row in exam_service.list_exams(db, institute_id, user["id"])]
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+
+
+@app.post("/v1/institutes/{institute_id}/exams", response_model=ExamOut, status_code=201)
+def create_exam(
+    institute_id: str,
+    body: ExamCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        exam = exam_service.create_exam(
+            db,
+            institute_id,
+            user["id"],
+            name=body.name,
+            academic_year_id=body.academicYearId,
+            section_id=body.sectionId,
+            subject_id=body.subjectId,
+            max_marks=body.maxMarks,
+            scheduled_at=body.scheduledAt,
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    return ExamOut(**exam_service.exam_to_dict(exam))
+
+
+@app.get("/v1/institutes/{institute_id}/exams/{exam_id}", response_model=ExamOut)
+def get_exam(
+    institute_id: str,
+    exam_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        exam = exam_service.get_exam(db, exam_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    if exam.institute_id != institute_id:
+        raise HTTPException(status_code=404, detail="Exam not found")
+    return ExamOut(**exam_service.exam_to_dict(exam))
+
+
+@app.put("/v1/institutes/{institute_id}/exams/{exam_id}", response_model=ExamOut)
+def update_exam(
+    institute_id: str,
+    exam_id: str,
+    body: ExamUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        exam = exam_service.update_exam(
+            db,
+            exam_id,
+            user["id"],
+            name=body.name,
+            section_id=body.sectionId,
+            subject_id=body.subjectId,
+            max_marks=body.maxMarks,
+            scheduled_at=body.scheduledAt,
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if exam.institute_id != institute_id:
+        raise HTTPException(status_code=404, detail="Exam not found")
+    return ExamOut(**exam_service.exam_to_dict(exam))
+
+
+@app.delete("/v1/institutes/{institute_id}/exams/{exam_id}", status_code=204)
+def delete_exam_route(
+    institute_id: str,
+    exam_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        exam = exam_service.get_exam(db, exam_id, user["id"])
+        if exam.institute_id != institute_id:
+            raise HTTPException(status_code=404, detail="Exam not found")
+        exam_service.delete_exam(db, exam_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.get("/v1/exams/{exam_id}/marks", response_model=list[MarkEntryOut])
+def get_exam_marks(
+    exam_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        rows = exam_service.list_marks(db, exam_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return [MarkEntryOut(**exam_service.mark_to_dict(row)) for row in rows]
+
+
+@app.put("/v1/exams/{exam_id}/marks", response_model=list[MarkEntryOut])
+def put_exam_marks(
+    exam_id: str,
+    body: MarksUpsert,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        rows = exam_service.upsert_marks(
+            db, exam_id, user["id"], [entry.model_dump() for entry in body.entries]
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return [MarkEntryOut(**exam_service.mark_to_dict(row)) for row in rows]
+
+
+@app.post("/v1/exams/{exam_id}/publish", response_model=ExamOut)
+def publish_exam(
+    exam_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        exam = exam_service.publish_exam(db, exam_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return ExamOut(**exam_service.exam_to_dict(exam))
+
+
+@app.get("/v1/institutes/{institute_id}/fee-structures", response_model=list[FeeStructureOut])
+def list_fee_structures(
+    institute_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        rows = fee_service.list_fee_structures(db, institute_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    return [
+        FeeStructureOut(
+            id=row.id,
+            instituteId=row.institute_id,
+            academicYearId=row.academic_year_id,
+            name=row.name,
+            amountPaise=row.amount_paise,
+        )
+        for row in rows
+    ]
+
+
+@app.post("/v1/institutes/{institute_id}/fee-structures", response_model=FeeStructureOut, status_code=201)
+def create_fee_structure(
+    institute_id: str,
+    body: FeeStructureCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        row = fee_service.create_fee_structure(
+            db, institute_id, user["id"], body.name, body.amountPaise, body.academicYearId
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    return FeeStructureOut(
+        id=row.id,
+        instituteId=row.institute_id,
+        academicYearId=row.academic_year_id,
+        name=row.name,
+        amountPaise=row.amount_paise,
+    )
+
+
+@app.post("/v1/institutes/{institute_id}/student-fees", response_model=StudentFeeDueOut, status_code=201)
+def assign_student_fee(
+    institute_id: str,
+    body: StudentFeeAssign,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        row = fee_service.assign_student_fee(
+            db, institute_id, user["id"], body.studentId, body.feeStructureId, body.amountPaise
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return StudentFeeDueOut(
+        studentId=row.student_id,
+        feeStructureId=row.fee_structure_id,
+        amountPaise=row.amount_paise,
+        paidPaise=row.paid_paise,
+        balancePaise=max(row.amount_paise - row.paid_paise, 0),
+    )
+
+
+@app.get("/v1/institutes/{institute_id}/fees/dues", response_model=list[StudentFeeDueOut])
+def list_fee_dues(
+    institute_id: str,
+    student_id: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        rows = fee_service.list_dues(db, institute_id, user["id"], student_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    return [StudentFeeDueOut(**row) for row in rows]
+
+
+@app.post("/v1/institutes/{institute_id}/fees/payments", response_model=PaymentOut, status_code=201)
+def record_fee_payment(
+    institute_id: str,
+    body: PaymentCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        payment = fee_service.record_payment(
+            db,
+            institute_id,
+            user["id"],
+            body.studentId,
+            body.amountPaise,
+            body.method,
+            body.reference,
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return PaymentOut(
+        id=payment.id,
+        instituteId=payment.institute_id,
+        studentId=payment.student_id,
+        amountPaise=payment.amount_paise,
+        method=payment.method,
+        reference=payment.reference,
+        receiptNumber=payment.receipt_number,
+        recordedBy=payment.recorded_by,
+        createdAt=payment.created_at,
+    )
+
+
+@app.get("/v1/institutes/{institute_id}/fee-receipts/{receipt_id}", response_model=PaymentOut)
+def get_fee_receipt(
+    institute_id: str,
+    receipt_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        payment = fee_service.get_receipt(db, institute_id, receipt_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return PaymentOut(
+        id=payment.id,
+        instituteId=payment.institute_id,
+        studentId=payment.student_id,
+        amountPaise=payment.amount_paise,
+        method=payment.method,
+        reference=payment.reference,
+        receiptNumber=payment.receipt_number,
+        recordedBy=payment.recorded_by,
+        createdAt=payment.created_at,
+    )
+
+
+@app.get("/v1/institutes/{institute_id}/calendar-events", response_model=list[CalendarEventOut])
+def list_calendar_events(
+    institute_id: str,
+    campus_id: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        rows = notice_service.list_calendar_events(db, institute_id, user["id"], campus_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    return [CalendarEventOut(**notice_service.calendar_event_to_dict(row)) for row in rows]
+
+
+@app.post("/v1/institutes/{institute_id}/calendar-events", response_model=CalendarEventOut, status_code=201)
+def create_calendar_event(
+    institute_id: str,
+    body: CalendarEventCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        row = notice_service.create_calendar_event(
+            db,
+            institute_id,
+            user["id"],
+            body.title,
+            body.eventDate,
+            body.description,
+            body.branchId,
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    return CalendarEventOut(**notice_service.calendar_event_to_dict(row))
+
+
+@app.get("/v1/users/me/guardian-children", response_model=GuardianChildrenOut)
+def my_guardian_children(
+    institute_id: str | None = Query(None, alias="instituteId"),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        rows = list_guardian_children(
+            db,
+            user["id"],
+            user["token"],
+            institute_id=institute_id,
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    return GuardianChildrenOut(children=[GuardianChildOut(**row) for row in rows])
+
+
+@app.get(
+    "/v1/institutes/{institute_id}/parent/children/{child_id}/threads",
+    response_model=list[ParentThreadOut],
+)
+def list_parent_child_threads(
+    institute_id: str,
+    child_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        rows = parent_messaging.list_threads(
+            db, institute_id, user["id"], child_id, user["token"]
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    return [ParentThreadOut(**row) for row in rows]
+
+
+@app.post(
+    "/v1/institutes/{institute_id}/parent/children/{child_id}/threads",
+    response_model=ParentThreadOut,
+    status_code=201,
+)
+def create_parent_child_thread(
+    institute_id: str,
+    child_id: str,
+    body: ParentThreadCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        row = parent_messaging.create_thread(
+            db,
+            institute_id,
+            user["id"],
+            child_id,
+            user["token"],
+            subject=body.subject,
+            initial_message=body.initialMessage,
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    return ParentThreadOut(**row)
+
+
+@app.post(
+    "/v1/institutes/{institute_id}/parent/children/{child_id}/threads/{thread_id}/messages",
+    response_model=ParentMessageOut,
+    status_code=201,
+)
+def post_parent_thread_message(
+    institute_id: str,
+    child_id: str,
+    thread_id: str,
+    body: ParentMessageCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        row = parent_messaging.post_message(
+            db,
+            institute_id,
+            user["id"],
+            child_id,
+            thread_id,
+            user["token"],
+            body=body.body,
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    return ParentMessageOut(**row)
+
+
+@app.get("/v1/institutes/{institute_id}/reports/{report_type}")
+def download_report(
+    institute_id: str,
+    report_type: str,
+    month: date | None = None,
+    campus_id: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        csv_body = report_service.build_report(
+            db, institute_id, user["id"], report_type, month=month, campus_id=campus_id
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    filename = f"{report_type}-report.csv"
+    return Response(
+        content=csv_body,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

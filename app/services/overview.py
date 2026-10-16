@@ -7,12 +7,15 @@ from app.models import (
     Assignment,
     AttendanceRecord,
     InstituteJoinRequest,
+    InstituteMember,
     InstitutePost,
     Section,
     SectionMember,
     Submission,
 )
+from app.roles import STAFF_ROLES
 from app.services.institutes import require_membership
+from app.services.members_roster import _counts
 
 
 def get_owner_overview(
@@ -43,8 +46,24 @@ def get_owner_overview(
             select(SectionMember).where(SectionMember.section_id.in_(section_ids))
         )
     ) if section_ids else []
-    students = {row.user_id for row in members if row.member_type == "student"}
-    staff = {row.user_id for row in members if row.member_type == "teacher"}
+
+    if campus_id:
+        campus_counts = _counts(db, institute_id, campus_id)
+        student_total = campus_counts["students"]
+        staff_total = campus_counts["staff"]
+    else:
+        student_total = len({row.user_id for row in members if row.member_type == "student"})
+        staff_total = (
+            db.scalar(
+                select(func.count())
+                .select_from(InstituteMember)
+                .where(
+                    InstituteMember.institute_id == institute_id,
+                    InstituteMember.role.in_(STAFF_ROLES),
+                )
+            )
+            or 0
+        )
 
     attendance = list(
         db.scalars(
@@ -123,8 +142,8 @@ def get_owner_overview(
 
     return {
         "stats": {
-            "students": len(students),
-            "staff": len(staff),
+            "students": student_total,
+            "staff": staff_total,
             "attendancePercent": (
                 round(sum(item["present"] for item in attendance_by_section) / sum(item["total"] for item in attendance_by_section) * 100)
                 if attendance and sum(item["total"] for item in attendance_by_section)

@@ -2,7 +2,7 @@ import secrets
 import uuid
 from datetime import date, datetime, time
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, String, Text, Time, UniqueConstraint, func
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, Text, Time, UniqueConstraint, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -76,6 +76,86 @@ class InstitutePost(Base):
     title: Mapped[str] = mapped_column(String(200))
     body: Mapped[str] = mapped_column(Text)
     posted_by: Mapped[str] = mapped_column(String(64))
+    audience: Mapped[str] = mapped_column(String(32), default="everyone")
+    target_section_ids: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class InstituteCalendarEvent(Base):
+    __tablename__ = "institute_calendar_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    institute_id: Mapped[str] = mapped_column(String(36), ForeignKey("institutes.id"))
+    branch_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("branches.id"), nullable=True)
+    title: Mapped[str] = mapped_column(String(200))
+    description: Mapped[str] = mapped_column(Text, default="")
+    event_date: Mapped[date] = mapped_column(Date)
+    created_by: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Exam(Base):
+    __tablename__ = "exams"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    institute_id: Mapped[str] = mapped_column(String(36), ForeignKey("institutes.id"))
+    academic_year_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("academic_years.id"), nullable=True)
+    section_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("sections.id"), nullable=True)
+    subject_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("subjects.id"), nullable=True)
+    name: Mapped[str] = mapped_column(String(200))
+    max_marks: Mapped[int] = mapped_column(Integer, default=100)
+    scheduled_at: Mapped[date | None] = mapped_column(Date, nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="draft")
+    created_by: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class MarkEntry(Base):
+    __tablename__ = "mark_entries"
+    __table_args__ = (UniqueConstraint("exam_id", "student_id", "subject_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    exam_id: Mapped[str] = mapped_column(String(36), ForeignKey("exams.id"))
+    student_id: Mapped[str] = mapped_column(String(64))
+    subject_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("subjects.id"), nullable=True)
+    marks_obtained: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    remarks: Mapped[str] = mapped_column(String(500), default="")
+
+
+class FeeStructure(Base):
+    __tablename__ = "fee_structures"
+    __table_args__ = (UniqueConstraint("institute_id", "academic_year_id", "name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    institute_id: Mapped[str] = mapped_column(String(36), ForeignKey("institutes.id"))
+    academic_year_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("academic_years.id"), nullable=True)
+    name: Mapped[str] = mapped_column(String(200))
+    amount_paise: Mapped[int] = mapped_column(Integer)
+
+
+class StudentFee(Base):
+    __tablename__ = "student_fees"
+    __table_args__ = (UniqueConstraint("institute_id", "student_id", "fee_structure_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    institute_id: Mapped[str] = mapped_column(String(36), ForeignKey("institutes.id"))
+    student_id: Mapped[str] = mapped_column(String(64))
+    fee_structure_id: Mapped[str] = mapped_column(String(36), ForeignKey("fee_structures.id"))
+    amount_paise: Mapped[int] = mapped_column(Integer)
+    paid_paise: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class Payment(Base):
+    __tablename__ = "payments"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    institute_id: Mapped[str] = mapped_column(String(36), ForeignKey("institutes.id"))
+    student_id: Mapped[str] = mapped_column(String(64))
+    amount_paise: Mapped[int] = mapped_column(Integer)
+    method: Mapped[str] = mapped_column(String(32), default="cash")
+    reference: Mapped[str] = mapped_column(String(200), default="")
+    receipt_number: Mapped[str] = mapped_column(String(64))
+    recorded_by: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -155,6 +235,7 @@ class SectionSubject(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     section_id: Mapped[str] = mapped_column(String(36), ForeignKey("sections.id"))
     subject_id: Mapped[str] = mapped_column(String(36), ForeignKey("subjects.id"))
+    weekly_periods: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class TeacherSubjectAssignment(Base):
@@ -186,6 +267,8 @@ class ScheduleSettings(Base):
     school_end: Mapped[time] = mapped_column(Time, default=time(15, 0))
     weekdays: Mapped[str] = mapped_column(String(32), default="1,2,3,4,5,6")
     revision: Mapped[int] = mapped_column(default=1)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    draft_saved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ScheduleSlot(Base):
@@ -214,6 +297,23 @@ class TimetableEntry(Base):
     section_id: Mapped[str] = mapped_column(String(36), ForeignKey("sections.id"))
     subject_id: Mapped[str] = mapped_column(String(36), ForeignKey("subjects.id"))
     teacher_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    room: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    locked: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class PublishedTimetableEntry(Base):
+    __tablename__ = "published_timetable_entries"
+    __table_args__ = (UniqueConstraint("slot_id", "day_of_week", "section_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    institute_id: Mapped[str] = mapped_column(String(36), ForeignKey("institutes.id"))
+    slot_id: Mapped[str] = mapped_column(String(36), ForeignKey("schedule_slots.id"))
+    day_of_week: Mapped[int] = mapped_column()
+    section_id: Mapped[str] = mapped_column(String(36), ForeignKey("sections.id"))
+    subject_id: Mapped[str] = mapped_column(String(36), ForeignKey("subjects.id"))
+    teacher_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    room: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    locked: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class ScheduleSpecialDay(Base):
@@ -270,6 +370,28 @@ class TeacherAbsence(Base):
     note: Mapped[str] = mapped_column(String(500), default="")
 
 
+class InstituteRoleSettings(Base):
+    __tablename__ = "institute_role_settings"
+
+    institute_id: Mapped[str] = mapped_column(String(36), ForeignKey("institutes.id"), primary_key=True)
+    principal_can_edit_timetable: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class TimetableSubstitution(Base):
+    __tablename__ = "timetable_substitutions"
+    __table_args__ = (
+        UniqueConstraint("institute_id", "substitution_date", "slot_id", "section_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    institute_id: Mapped[str] = mapped_column(String(36), ForeignKey("institutes.id"))
+    substitution_date: Mapped[date] = mapped_column(Date)
+    slot_id: Mapped[str] = mapped_column(String(36), ForeignKey("schedule_slots.id"))
+    section_id: Mapped[str] = mapped_column(String(36), ForeignKey("sections.id"))
+    original_teacher_id: Mapped[str] = mapped_column(String(64))
+    substitute_teacher_id: Mapped[str] = mapped_column(String(64))
+
+
 class DailyNote(Base):
     __tablename__ = "daily_notes"
 
@@ -313,6 +435,38 @@ class Submission(Base):
     student_id: Mapped[str] = mapped_column(String(64))
     content: Mapped[str] = mapped_column(Text)
     submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class GuardianLinkCache(Base):
+    """TTL cache of Social guardian→children links (not authoritative)."""
+
+    __tablename__ = "guardian_link_cache"
+
+    guardian_user_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    student_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ParentTeacherThread(Base):
+    __tablename__ = "parent_teacher_threads"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    institute_id: Mapped[str] = mapped_column(String(36), ForeignKey("institutes.id"))
+    student_id: Mapped[str] = mapped_column(String(64))
+    subject: Mapped[str] = mapped_column(String(200))
+    created_by_user_id: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(16), default="open")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ParentTeacherMessage(Base):
+    __tablename__ = "parent_teacher_messages"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    thread_id: Mapped[str] = mapped_column(String(36), ForeignKey("parent_teacher_threads.id"))
+    sender_user_id: Mapped[str] = mapped_column(String(64))
+    body: Mapped[str] = mapped_column(Text)
+    sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 def new_join_code() -> str:

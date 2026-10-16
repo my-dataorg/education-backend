@@ -71,7 +71,7 @@ def list_section_subjects(db: Session, section_id: str) -> list[dict]:
         .order_by(Subject.name)
     )
     result = []
-    for subject, _ in rows:
+    for subject, link in rows:
         teachers = db.scalars(
             select(TeacherSubjectAssignment.teacher_id).where(
                 TeacherSubjectAssignment.section_id == section_id,
@@ -87,29 +87,66 @@ def list_section_subjects(db: Session, section_id: str) -> list[dict]:
         result.append({
             "id": subject.id,
             "name": subject.name,
+            "weeklyPeriods": link.weekly_periods,
             "teachers": list(teachers),
             "students": list(students),
         })
     return result
 
 
-def link_subject(db: Session, section_id: str, subject_id: str) -> Subject:
+def link_subject(
+    db: Session,
+    section_id: str,
+    subject_id: str,
+    weekly_periods: int | None = None,
+) -> Subject:
     section = get_section(db, section_id)
     subject = db.get(Subject, subject_id)
     if not subject or subject.institute_id != section.institute_id:
         raise ValueError("Subject not found")
+    if weekly_periods is not None and (weekly_periods < 1 or weekly_periods > 40):
+        raise ValueError("Weekly periods must be between 1 and 40")
     existing = db.scalar(
         select(SectionSubject).where(
             SectionSubject.section_id == section_id, SectionSubject.subject_id == subject_id
         )
     )
-    if not existing:
-        db.add(SectionSubject(section_id=section_id, subject_id=subject_id))
+    if existing:
+        if weekly_periods is not None:
+            existing.weekly_periods = weekly_periods
+            db.commit()
+    else:
+        db.add(
+            SectionSubject(
+                section_id=section_id,
+                subject_id=subject_id,
+                weekly_periods=weekly_periods,
+            )
+        )
         try:
             db.commit()
         except IntegrityError:
             db.rollback()
     return subject
+
+
+def update_section_subject_weekly_periods(
+    db: Session, section_id: str, subject_id: str, weekly_periods: int | None
+) -> SectionSubject:
+    link = db.scalar(
+        select(SectionSubject).where(
+            SectionSubject.section_id == section_id,
+            SectionSubject.subject_id == subject_id,
+        )
+    )
+    if not link:
+        raise ValueError("Subject is not linked to this section")
+    if weekly_periods is not None and (weekly_periods < 1 or weekly_periods > 40):
+        raise ValueError("Weekly periods must be between 1 and 40")
+    link.weekly_periods = weekly_periods
+    db.commit()
+    db.refresh(link)
+    return link
 
 
 def unlink_subject(db: Session, section_id: str, subject_id: str) -> None:
