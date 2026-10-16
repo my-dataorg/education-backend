@@ -88,8 +88,14 @@ class MemberRoleUpdate(BaseModel):
 class MemberProfileOut(BaseModel):
     userId: str
     role: str
+    displayName: str = ""
+    email: str = ""
     sections: list[dict]
     branches: list[str]
+    dateOfBirth: date | None = None
+    gender: str | None = None
+    classLabel: str | None = None
+    admissionNo: str | None = None
 
 
 class MembersRosterItemOut(BaseModel):

@@ -162,9 +162,13 @@ def remove_member(db: Session, institute_id: str, member_user_id: str) -> None:
 
 
 def get_member_profile(db: Session, institute_id: str, member_user_id: str) -> dict:
+    from app.services.platform_users import get_users_brief
+
     member = get_membership(db, institute_id, member_user_id)
     if not member:
         raise ValueError("Member not found")
+
+    brief = get_users_brief([member_user_id]).get(member_user_id, {})
 
     sections = db.scalars(
         select(Section)
@@ -200,11 +204,22 @@ def get_member_profile(db: Session, institute_id: str, member_user_id: str) -> d
             }
         )
 
+    class_label = None
+    if section_details and member.role == "student":
+        first = section_details[0]
+        class_label = f"{first.get('className') or ''}-{first.get('sectionName') or ''}".strip("-")
+
     return {
         "userId": member.user_id,
         "role": member.role,
+        "displayName": brief.get("displayName") or "",
+        "email": brief.get("email") or "",
         "sections": section_details,
         "branches": sorted(branch_names),
+        "dateOfBirth": brief.get("dateOfBirth"),
+        "gender": brief.get("gender"),
+        "classLabel": class_label,
+        "admissionNo": None,
     }
 
 
