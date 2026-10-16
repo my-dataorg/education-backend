@@ -884,8 +884,14 @@ class NoteOut(BaseModel):
 class InstitutePostCreate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     body: str = Field(min_length=1, max_length=5000)
-    audience: str = Field(default="everyone", pattern="^(everyone|staff|students|parents|class)$")
+    audience: str = Field(
+        default="everyone",
+        pattern="^(everyone|staff|students|parents|class|boys|girls|teachers|principals|custom|distribution_list)$",
+    )
     targetSectionIds: list[str] = Field(default_factory=list)
+    targetUserIds: list[str] = Field(default_factory=list)
+    studentGender: str | None = None
+    distributionListId: str | None = None
 
 
 class InstitutePostOut(BaseModel):
@@ -895,6 +901,30 @@ class InstitutePostOut(BaseModel):
     postedBy: str
     audience: str = "everyone"
     targetSectionIds: list[str] = Field(default_factory=list)
+    targetUserIds: list[str] = Field(default_factory=list)
+    studentGender: str | None = None
+    distributionListId: str | None = None
+    createdAt: datetime
+
+
+class DistributionListCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    audience: str = Field(
+        default="everyone",
+        pattern="^(everyone|staff|students|parents|class|boys|girls|teachers|principals|custom)$",
+    )
+    targetSectionIds: list[str] = Field(default_factory=list)
+    targetUserIds: list[str] = Field(default_factory=list)
+    studentGender: str | None = None
+
+
+class DistributionListOut(BaseModel):
+    id: str
+    name: str
+    audience: str
+    targetSectionIds: list[str] = Field(default_factory=list)
+    targetUserIds: list[str] = Field(default_factory=list)
+    studentGender: str | None = None
     createdAt: datetime
 
 
@@ -903,6 +933,14 @@ class CalendarEventCreate(BaseModel):
     description: str = ""
     eventDate: date
     branchId: str | None = None
+    audience: str = Field(
+        default="everyone",
+        pattern="^(everyone|staff|students|parents|class|boys|girls|teachers|principals|custom|distribution_list)$",
+    )
+    targetSectionIds: list[str] = Field(default_factory=list)
+    targetUserIds: list[str] = Field(default_factory=list)
+    studentGender: str | None = None
+    distributionListId: str | None = None
 
 
 class CalendarEventOut(BaseModel):
@@ -911,6 +949,11 @@ class CalendarEventOut(BaseModel):
     description: str
     eventDate: date
     branchId: str | None
+    audience: str = "everyone"
+    targetSectionIds: list[str] = Field(default_factory=list)
+    targetUserIds: list[str] = Field(default_factory=list)
+    studentGender: str | None = None
+    distributionListId: str | None = None
     createdBy: str
     createdAt: datetime
 

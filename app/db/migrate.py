@@ -512,6 +512,33 @@ def migrate_mvp_domains(engine: Engine) -> None:
                     created_by VARCHAR(64) NOT NULL,
                     created_at TIMESTAMPTZ DEFAULT NOW()
                 );
+                ALTER TABLE institute_posts
+                ADD COLUMN IF NOT EXISTS target_user_ids TEXT NOT NULL DEFAULT '';
+                ALTER TABLE institute_posts
+                ADD COLUMN IF NOT EXISTS student_gender VARCHAR(16);
+                ALTER TABLE institute_posts
+                ADD COLUMN IF NOT EXISTS distribution_list_id VARCHAR(36);
+                CREATE TABLE IF NOT EXISTS notice_distribution_lists (
+                    id VARCHAR(36) PRIMARY KEY,
+                    institute_id VARCHAR(36) NOT NULL REFERENCES institutes(id),
+                    name VARCHAR(120) NOT NULL,
+                    audience VARCHAR(32) NOT NULL DEFAULT 'everyone',
+                    target_section_ids TEXT NOT NULL DEFAULT '',
+                    target_user_ids TEXT NOT NULL DEFAULT '',
+                    student_gender VARCHAR(16),
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    UNIQUE (institute_id, name)
+                );
+                ALTER TABLE institute_calendar_events
+                ADD COLUMN IF NOT EXISTS audience VARCHAR(32) NOT NULL DEFAULT 'everyone';
+                ALTER TABLE institute_calendar_events
+                ADD COLUMN IF NOT EXISTS target_section_ids TEXT NOT NULL DEFAULT '';
+                ALTER TABLE institute_calendar_events
+                ADD COLUMN IF NOT EXISTS target_user_ids TEXT NOT NULL DEFAULT '';
+                ALTER TABLE institute_calendar_events
+                ADD COLUMN IF NOT EXISTS student_gender VARCHAR(16);
+                ALTER TABLE institute_calendar_events
+                ADD COLUMN IF NOT EXISTS distribution_list_id VARCHAR(36);
                 CREATE TABLE IF NOT EXISTS exams (
                     id VARCHAR(36) PRIMARY KEY,
                     institute_id VARCHAR(36) NOT NULL REFERENCES institutes(id),

@@ -66,6 +66,8 @@ from app.schemas import (
     InstituteSummaryOut,
     InstitutePostCreate,
     InstitutePostOut,
+    DistributionListCreate,
+    DistributionListOut,
     CalendarEventCreate,
     CalendarEventOut,
     ExamCreate,
@@ -263,6 +265,7 @@ from app.services.user_identity import enrich_rows, identity_for_user
 from app.services import exams as exam_service
 from app.services import fees as fee_service
 from app.services.attendance_summary import get_attendance_summary
+from app.services import distribution_lists as dl_service
 from app.services import notices as notice_service
 from app.services import reports as report_service
 from app.services.guardians import list_guardian_children, set_demo_guardian_links
@@ -1079,10 +1082,75 @@ def create_post(
             body.body,
             body.audience,
             body.targetSectionIds,
+            body.targetUserIds,
+            body.studentGender,
+            body.distributionListId,
         )
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     return InstitutePostOut(**notice_service.post_to_dict(row))
+
+
+@app.get(
+    "/v1/institutes/{institute_id}/distribution-lists",
+    response_model=list[DistributionListOut],
+)
+def list_distribution_lists(
+    institute_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        rows = dl_service.list_distribution_lists(db, institute_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    return [DistributionListOut(**dl_service.distribution_list_to_dict(row)) for row in rows]
+
+
+@app.post(
+    "/v1/institutes/{institute_id}/distribution-lists",
+    response_model=DistributionListOut,
+    status_code=201,
+)
+def create_distribution_list(
+    institute_id: str,
+    body: DistributionListCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        row = dl_service.create_distribution_list(
+            db,
+            institute_id,
+            user["id"],
+            body.name,
+            body.audience,
+            body.targetSectionIds,
+            body.targetUserIds,
+            body.studentGender,
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return DistributionListOut(**dl_service.distribution_list_to_dict(row))
+
+
+@app.delete("/v1/institutes/{institute_id}/distribution-lists/{list_id}", status_code=204)
+def delete_distribution_list(
+    institute_id: str,
+    list_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        dl_service.delete_distribution_list(db, institute_id, user["id"], list_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
 
 @app.get("/v1/institutes/{institute_id}/schedule", response_model=ScheduleOut)
@@ -2674,9 +2742,16 @@ def create_calendar_event(
             body.eventDate,
             body.description,
             body.branchId,
+            body.audience,
+            body.targetSectionIds,
+            body.targetUserIds,
+            body.studentGender,
+            body.distributionListId,
         )
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     return CalendarEventOut(**notice_service.calendar_event_to_dict(row))
 
 

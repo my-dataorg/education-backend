@@ -78,6 +78,23 @@ class InstitutePost(Base):
     posted_by: Mapped[str] = mapped_column(String(64))
     audience: Mapped[str] = mapped_column(String(32), default="everyone")
     target_section_ids: Mapped[str] = mapped_column(Text, default="")
+    target_user_ids: Mapped[str] = mapped_column(Text, default="")
+    student_gender: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    distribution_list_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class NoticeDistributionList(Base):
+    __tablename__ = "notice_distribution_lists"
+    __table_args__ = (UniqueConstraint("institute_id", "name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    institute_id: Mapped[str] = mapped_column(String(36), ForeignKey("institutes.id"))
+    name: Mapped[str] = mapped_column(String(120))
+    audience: Mapped[str] = mapped_column(String(32), default="everyone")
+    target_section_ids: Mapped[str] = mapped_column(Text, default="")
+    target_user_ids: Mapped[str] = mapped_column(Text, default="")
+    student_gender: Mapped[str | None] = mapped_column(String(16), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -90,6 +107,11 @@ class InstituteCalendarEvent(Base):
     title: Mapped[str] = mapped_column(String(200))
     description: Mapped[str] = mapped_column(Text, default="")
     event_date: Mapped[date] = mapped_column(Date)
+    audience: Mapped[str] = mapped_column(String(32), default="everyone")
+    target_section_ids: Mapped[str] = mapped_column(Text, default="")
+    target_user_ids: Mapped[str] = mapped_column(Text, default="")
+    student_gender: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    distribution_list_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     created_by: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

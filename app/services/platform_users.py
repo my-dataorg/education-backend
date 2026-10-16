@@ -21,6 +21,7 @@ def _item_to_brief(item: dict) -> dict:
         "email": (item.get("email") or "").strip().lower(),
         "username": (item.get("username") or "").strip(),
         "dateOfBirth": item.get("dateOfBirth"),
+        "gender": (item.get("gender") or "").strip().lower(),
     }
 
 
