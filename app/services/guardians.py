@@ -12,6 +12,7 @@ from app.services.social_client import (
 )
 
 CACHE_TTL = timedelta(minutes=10)
+DEMO_CACHE_TTL = timedelta(days=365)
 
 
 def _utcnow() -> datetime:
@@ -133,3 +134,40 @@ def list_guardian_children(
             continue
         children.append({"studentId": student_id, "instituteIds": institute_ids})
     return children
+
+
+def set_demo_guardian_links(
+    db: Session,
+    institute_id: str,
+    links: list[tuple[str, list[str]]],
+) -> int:
+    """Persist guardian→student links for demo seed when Social is not configured."""
+    if not links:
+        return 0
+    now = _utcnow()
+    expires_at = now + DEMO_CACHE_TTL
+    updated = 0
+    for guardian_user_id, student_user_ids in links:
+        if not student_user_ids:
+            continue
+        for student_id in student_user_ids:
+            if not student_enrolled_in_institute(db, institute_id, student_id):
+                raise ValueError("Student is not enrolled in this institute")
+        merged = sorted(set(student_user_ids))
+        row = db.get(GuardianLinkCache, guardian_user_id)
+        if row:
+            existing = json.loads(row.student_ids_json or "[]")
+            merged = sorted(set(existing) | set(student_user_ids))
+            row.student_ids_json = json.dumps(merged)
+            row.expires_at = expires_at
+        else:
+            db.add(
+                GuardianLinkCache(
+                    guardian_user_id=guardian_user_id,
+                    student_ids_json=json.dumps(merged),
+                    expires_at=expires_at,
+                )
+            )
+        updated += 1
+    db.commit()
+    return updated

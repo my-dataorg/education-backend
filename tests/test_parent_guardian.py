@@ -6,7 +6,7 @@ from sqlalchemy.pool import StaticPool
 
 from app import main
 from app.db.session import get_db
-from app.models import Base, Institute, InstituteMember
+from app.models import Base, GuardianLinkCache, Institute, InstituteMember
 from app.services.social_client import clear_guardian_cache_stub, write_guardian_cache_stub
 
 
@@ -106,6 +106,37 @@ def test_parent_threads_and_messages(db: Session, client: TestClient):
     )
     assert message.status_code == 201
     assert message.json()["body"] == "Follow-up question"
+
+
+def test_owner_can_seed_guardian_links(db: Session, client: TestClient):
+    institute = Institute(id="inst-1", name="School", join_code="JOIN1")
+    db.add_all(
+        [
+            institute,
+            InstituteMember(institute_id=institute.id, user_id="owner", role="owner"),
+            InstituteMember(institute_id=institute.id, user_id="parent-1", role="parent"),
+            InstituteMember(institute_id=institute.id, user_id="student-1", role="student"),
+        ]
+    )
+    db.commit()
+    main.app.dependency_overrides[main.require_education_subscription] = (
+        lambda: {"id": "owner", "email": "owner@example.com", "token": "test"}
+    )
+
+    response = client.post(
+        f"/v1/institutes/{institute.id}/guardian-links/seed",
+        json={
+            "links": [
+                {"guardianUserId": "parent-1", "studentUserIds": ["student-1"]},
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["guardiansUpdated"] == 1
+    row = db.get(GuardianLinkCache, "parent-1")
+    assert row is not None
+    assert "student-1" in row.student_ids_json
 
 
 def test_parent_threads_rejects_unlinked_child(db: Session, client: TestClient):

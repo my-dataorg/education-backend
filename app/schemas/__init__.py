@@ -1075,6 +1075,19 @@ class GuardianChildrenOut(BaseModel):
     children: list[GuardianChildOut]
 
 
+class GuardianLinkSeedItem(BaseModel):
+    guardianUserId: str
+    studentUserIds: list[str]
+
+
+class GuardianLinksSeedIn(BaseModel):
+    links: list[GuardianLinkSeedItem]
+
+
+class GuardianLinksSeedOut(BaseModel):
+    guardiansUpdated: int
+
+
 class ParentThreadCreate(BaseModel):
     subject: str = Field(min_length=1, max_length=200)
     initialMessage: str | None = None

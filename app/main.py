@@ -145,6 +145,8 @@ from app.schemas import (
     TeacherSubjectOut,
     UserSearchOut,
     GuardianChildrenOut,
+    GuardianLinksSeedIn,
+    GuardianLinksSeedOut,
     GuardianChildOut,
     ParentThreadCreate,
     ParentThreadOut,
@@ -263,7 +265,7 @@ from app.services import fees as fee_service
 from app.services.attendance_summary import get_attendance_summary
 from app.services import notices as notice_service
 from app.services import reports as report_service
-from app.services.guardians import list_guardian_children
+from app.services.guardians import list_guardian_children, set_demo_guardian_links
 from app.services import parent_messaging
 
 User = dict
@@ -2676,6 +2678,27 @@ def create_calendar_event(
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     return CalendarEventOut(**notice_service.calendar_event_to_dict(row))
+
+
+@app.post(
+    "/v1/institutes/{institute_id}/guardian-links/seed",
+    response_model=GuardianLinksSeedOut,
+)
+def seed_guardian_links(
+    institute_id: str,
+    body: GuardianLinksSeedIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_owner(db, institute_id, user["id"])
+        pairs = [(link.guardianUserId, link.studentUserIds) for link in body.links]
+        count = set_demo_guardian_links(db, institute_id, pairs)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return GuardianLinksSeedOut(guardiansUpdated=count)
 
 
 @app.get("/v1/users/me/guardian-children", response_model=GuardianChildrenOut)
