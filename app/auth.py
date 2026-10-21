@@ -9,9 +9,9 @@ _bearer = HTTPBearer(auto_error=False)
 _jwks_cache: dict | None = None
 
 
-async def _get_jwks() -> dict:
+async def _get_jwks(*, force_refresh: bool = False) -> dict:
     global _jwks_cache
-    if _jwks_cache:
+    if _jwks_cache and not force_refresh:
         return _jwks_cache
     async with httpx.AsyncClient() as client:
         res = await client.get(settings.jwks_url, timeout=10)
@@ -49,15 +49,24 @@ async def _resolve_email(token: str, payload: dict) -> str:
     return _normalize_email(payload.get("preferred_username"))
 
 
+def _find_jwk(jwks: dict, kid: str) -> dict | None:
+    return next((k for k in jwks["keys"] if k["kid"] == kid), None)
+
+
 async def get_current_user(
     creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
 ) -> dict:
     if not creds:
         raise HTTPException(status_code=401, detail="Missing token")
     try:
-        jwks = await _get_jwks()
         header = jwt.get_unverified_header(creds.credentials)
-        key = next(k for k in jwks["keys"] if k["kid"] == header["kid"])
+        jwks = await _get_jwks()
+        key = _find_jwk(jwks, header["kid"])
+        if key is None:
+            jwks = await _get_jwks(force_refresh=True)
+            key = _find_jwk(jwks, header["kid"])
+        if key is None:
+            raise JWTError("Signing key not found")
         payload = jwt.decode(
             creds.credentials,
             key,
@@ -65,7 +74,7 @@ async def get_current_user(
             issuer=settings.issuer,
             options={"verify_aud": False},
         )
-    except (JWTError, StopIteration, httpx.HTTPError) as e:
+    except (JWTError, httpx.HTTPError) as e:
         raise HTTPException(status_code=401, detail="Invalid token") from e
 
     email = await _resolve_email(creds.credentials, payload)
