@@ -8,7 +8,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_user, require_education_subscription
-from app.roles import MANAGE_ROLES
+from app.roles import MANAGE_ROLES, TIMETABLE_EDIT_ROLES
 from app.config import settings
 from app.db.migrate import (
     migrate_invitations,
@@ -25,7 +25,9 @@ from app.db.migrate import (
     migrate_institute_role_settings,
     migrate_timetable_substitutions,
     migrate_mvp_domains,
+    migrate_institute_profile,
     migrate_parent_guardian_messaging,
+    migrate_section_class_teacher,
     run_migrations,
     seed_default_activities,
     seed_default_branches,
@@ -59,6 +61,9 @@ from app.schemas import (
     BranchCreate,
     BranchOut,
     BranchUpdate,
+    CampusScopeOut,
+    InstituteProfileOut,
+    InstituteProfileUpdate,
     InstituteCreate,
     InstituteDetailOut,
     InstituteOut,
@@ -127,6 +132,7 @@ from app.schemas import (
     EnrollmentTransferIn,
     EnrollmentTransferOut,
     SectionOut,
+    SectionClassTeacherUpdate,
     SectionOverviewOut,
     ScheduleOut,
     ScheduleUpdate,
@@ -159,11 +165,14 @@ from app.services.institutes import (
     ADMIN_ROLES,
     TEACHER_ROLES,
     add_member,
+    branch_out_dict,
     create_branch,
     delete_branch,
     delete_institute,
     get_institute_stats,
     get_institute_summary,
+    institute_profile_dict,
+    update_institute_profile,
     get_member_profile,
     get_membership,
     list_branches,
@@ -188,6 +197,7 @@ from app.services.subject_teachers import (
     get_subject_teacher_matrix,
     list_subject_teacher_panel,
 )
+from app.services.campus_scope import get_campus_scope
 from app.services.overview import get_owner_overview
 from app.services.sections import (
     assign_section_member,
@@ -201,8 +211,10 @@ from app.services.sections import (
     list_my_enrolled_sections,
     remove_section_member,
     transfer_student_enrollment,
+    set_section_class_teacher,
     require_section_access,
     require_section_student,
+    require_daily_note_editor,
     require_section_teacher,
 )
 from app.services.schedule import get_schedule, replace_schedule
@@ -293,6 +305,8 @@ async def lifespan(_: FastAPI):
     migrate_timetable_substitutions(engine)
     migrate_mvp_domains(engine)
     migrate_parent_guardian_messaging(engine)
+    migrate_institute_profile(engine)
+    migrate_section_class_teacher(engine)
     with SessionLocal() as db:
         seed_default_branches(db)
         seed_default_activities(db)
@@ -324,6 +338,7 @@ def _section_out(db: Session, section: Section) -> SectionOut:
         className=section.class_name,
         branchId=section.branch_id,
         branchName=branch_name,
+        classTeacherUserId=section.class_teacher_user_id,
     )
 
 
@@ -915,6 +930,64 @@ def reject_invite(
         raise HTTPException(status_code=404, detail=str(e)) from e
 
 
+@app.get("/v1/institutes/{institute_id}/profile", response_model=InstituteProfileOut)
+def get_institute_profile(
+    institute_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_membership(db, institute_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    institute = db.get(Institute, institute_id)
+    if not institute:
+        raise HTTPException(status_code=404, detail="Institute not found")
+    return InstituteProfileOut(**institute_profile_dict(institute))
+
+
+@app.patch("/v1/institutes/{institute_id}/profile", response_model=InstituteProfileOut)
+def patch_institute_profile(
+    institute_id: str,
+    body: InstituteProfileUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        institute = update_institute_profile(
+            db,
+            institute_id,
+            user["id"],
+            name=body.name,
+            description=body.description,
+            email=body.email,
+            phone=body.phone,
+            website=body.website,
+            address=body.address,
+            city=body.city,
+            state=body.state,
+            postalCode=body.postalCode,
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return InstituteProfileOut(**institute_profile_dict(institute))
+
+
+@app.get("/v1/institutes/{institute_id}/campus-scope", response_model=CampusScopeOut)
+def campus_scope(
+    institute_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        scope = get_campus_scope(db, institute_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    return CampusScopeOut(**scope)
+
+
 @app.get("/v1/institutes/{institute_id}/branches", response_model=list[BranchOut])
 def get_branches(
     institute_id: str,
@@ -926,17 +999,7 @@ def get_branches(
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     branches = list_branches(db, institute_id)
-    return [
-        BranchOut(
-            id=b.id,
-            name=b.name,
-            address=b.address,
-            city=b.city,
-            isPrimary=b.is_primary,
-            sectionCount=count,
-        )
-        for b, count in branches
-    ]
+    return [BranchOut(**branch_out_dict(b, count)) for b, count in branches]
 
 
 @app.post("/v1/institutes/{institute_id}/branches", response_model=BranchOut, status_code=201)
@@ -949,18 +1012,20 @@ def add_branch(
     try:
         require_admin(db, institute_id, user["id"])
         branch = create_branch(
-            db, institute_id, body.name, body.address, body.city, body.isPrimary
+            db,
+            institute_id,
+            body.name,
+            body.address,
+            body.city,
+            body.isPrimary,
+            state=body.state,
+            postal_code=body.postalCode,
+            email=body.email,
+            phone=body.phone,
         )
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
-    return BranchOut(
-        id=branch.id,
-        name=branch.name,
-        address=branch.address,
-        city=branch.city,
-        isPrimary=branch.is_primary,
-        sectionCount=0,
-    )
+    return BranchOut(**branch_out_dict(branch, 0))
 
 
 @app.patch("/v1/institutes/{institute_id}/branches/{branch_id}", response_model=BranchOut)
@@ -980,6 +1045,10 @@ def edit_branch(
             name=body.name,
             address=body.address,
             city=body.city,
+            state=body.state,
+            postal_code=body.postalCode,
+            email=body.email,
+            phone=body.phone,
             isPrimary=body.isPrimary,
         )
     except PermissionError as e:
@@ -989,14 +1058,7 @@ def edit_branch(
     count = db.scalar(
         select(func.count()).select_from(Section).where(Section.branch_id == branch_id)
     )
-    return BranchOut(
-        id=branch.id,
-        name=branch.name,
-        address=branch.address,
-        city=branch.city,
-        isPrimary=branch.is_primary,
-        sectionCount=count or 0,
-    )
+    return BranchOut(**branch_out_dict(branch, count or 0))
 
 
 @app.delete("/v1/institutes/{institute_id}/branches/{branch_id}", status_code=204)
@@ -1622,6 +1684,29 @@ def create_section(
     db.add(section)
     db.commit()
     db.refresh(section)
+    return _section_out(db, section)
+
+
+@app.patch(
+    "/v1/institutes/{institute_id}/sections/{section_id}/class-teacher",
+    response_model=SectionOut,
+)
+def patch_section_class_teacher(
+    institute_id: str,
+    section_id: str,
+    body: SectionClassTeacherUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        member = require_membership(db, institute_id, user["id"])
+        if member.role not in TIMETABLE_EDIT_ROLES:
+            raise PermissionError("Owner, admin, or principal role required")
+        section = set_section_class_teacher(db, institute_id, section_id, body.userId)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     return _section_out(db, section)
 
 
@@ -2280,7 +2365,7 @@ def create_note(
     user: User = Depends(require_education_subscription),
 ):
     try:
-        require_section_teacher(db, section_id, user["id"])
+        require_daily_note_editor(db, section_id, user["id"])
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ValueError as e:

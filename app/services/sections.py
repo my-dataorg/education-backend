@@ -218,7 +218,24 @@ def transfer_student_enrollment(
     }
 
 
+def set_section_class_teacher(
+    db: Session, institute_id: str, section_id: str, teacher_user_id: str | None
+) -> Section:
+    section = db.get(Section, section_id)
+    if not section or section.institute_id != institute_id:
+        raise ValueError("Section not found")
+    if teacher_user_id and not _is_section_teacher(db, section_id, teacher_user_id):
+        raise ValueError("Class teacher must be assigned to this section as a teacher")
+    section.class_teacher_user_id = teacher_user_id
+    db.commit()
+    db.refresh(section)
+    return section
+
+
 def remove_section_member(db: Session, section_id: str, user_id: str) -> None:
+    section = db.get(Section, section_id)
+    if section and section.class_teacher_user_id == user_id:
+        section.class_teacher_user_id = None
     db.execute(
         delete(SectionSubjectStudentAssignment).where(
             SectionSubjectStudentAssignment.section_id == section_id,
@@ -232,6 +249,37 @@ def remove_section_member(db: Session, section_id: str, user_id: str) -> None:
         )
     )
     db.commit()
+
+
+def _is_section_teacher(db: Session, section_id: str, user_id: str) -> bool:
+    return bool(
+        db.scalar(
+            select(SectionMember).where(
+                SectionMember.section_id == section_id,
+                SectionMember.user_id == user_id,
+                SectionMember.member_type == "teacher",
+            )
+        )
+    )
+
+
+def can_edit_daily_notes(db: Session, section: Section, user_id: str) -> bool:
+    """Only the class teacher may author notes; institute admins are read-only."""
+    member = get_membership(db, section.institute_id, user_id)
+    if not member or member.role in MANAGE_ROLES:
+        return False
+    if member.role not in TEACHER_ROLES:
+        return False
+    if section.class_teacher_user_id:
+        return section.class_teacher_user_id == user_id
+    return _is_section_teacher(db, section.id, user_id)
+
+
+def require_daily_note_editor(db: Session, section_id: str, user_id: str) -> Section:
+    section = require_section_access(db, section_id, user_id)
+    if not can_edit_daily_notes(db, section, user_id):
+        raise PermissionError("Only the class teacher can add or edit daily notes")
+    return section
 
 
 def require_section_teacher(db: Session, section_id: str, user_id: str) -> Section:
@@ -344,6 +392,8 @@ def get_section_overview(db: Session, section_id: str, user_id: str) -> dict:
         "sectionId": section.id,
         "sectionName": section.name,
         "className": section.class_name,
+        "classTeacherUserId": section.class_teacher_user_id,
+        "canEditDailyNotes": can_edit_daily_notes(db, section, user_id),
         "teacherCount": len(teachers),
         "studentCount": enrolled_students,
         "notesCount": notes_count,

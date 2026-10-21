@@ -342,6 +342,10 @@ def get_institute_summary(db: Session, institute_id: str) -> dict:
                 "isPrimary": branch.is_primary,
                 "address": branch.address,
                 "city": branch.city,
+                "state": branch.state,
+                "postalCode": branch.postal_code,
+                "email": branch.email,
+                "phone": branch.phone,
                 "teacherCount": len(teacher_ids),
                 "studentCount": len(student_ids),
                 "teachers": teachers,
@@ -446,6 +450,46 @@ def list_branches(db: Session, institute_id: str) -> list[tuple[Branch, int]]:
     return result
 
 
+def institute_profile_dict(institute: Institute) -> dict:
+    return {
+        "id": institute.id,
+        "name": institute.name,
+        "joinCode": institute.join_code,
+        "description": institute.description or "",
+        "email": institute.email or "",
+        "phone": institute.phone or "",
+        "website": institute.website or "",
+        "address": institute.address or "",
+        "city": institute.city or "",
+        "state": institute.state or "",
+        "postalCode": institute.postal_code or "",
+    }
+
+
+def update_institute_profile(db: Session, institute_id: str, user_id: str, **fields) -> Institute:
+    require_manage(db, institute_id, user_id)
+    institute = db.get(Institute, institute_id)
+    if not institute:
+        raise ValueError("Institute not found")
+    mapping = {
+        "name": "name",
+        "description": "description",
+        "email": "email",
+        "phone": "phone",
+        "website": "website",
+        "address": "address",
+        "city": "city",
+        "state": "state",
+        "postalCode": "postal_code",
+    }
+    for key, attr in mapping.items():
+        if key in fields and fields[key] is not None:
+            setattr(institute, attr, fields[key])
+    db.commit()
+    db.refresh(institute)
+    return institute
+
+
 def create_branch(
     db: Session,
     institute_id: str,
@@ -453,6 +497,11 @@ def create_branch(
     address: str,
     city: str,
     is_primary: bool,
+    *,
+    state: str = "",
+    postal_code: str = "",
+    email: str = "",
+    phone: str = "",
 ) -> Branch:
     if is_primary:
         for existing in db.scalars(
@@ -464,6 +513,10 @@ def create_branch(
         name=name,
         address=address,
         city=city,
+        state=state,
+        postal_code=postal_code,
+        email=email,
+        phone=phone,
         is_primary=is_primary,
     )
     db.add(branch)
@@ -480,6 +533,10 @@ def update_branch(
     name: str | None = None,
     address: str | None = None,
     city: str | None = None,
+    state: str | None = None,
+    postal_code: str | None = None,
+    email: str | None = None,
+    phone: str | None = None,
     is_primary: bool | None = None,
 ) -> Branch:
     branch = db.scalar(
@@ -498,11 +555,34 @@ def update_branch(
         branch.address = address
     if city is not None:
         branch.city = city
+    if state is not None:
+        branch.state = state
+    if postal_code is not None:
+        branch.postal_code = postal_code
+    if email is not None:
+        branch.email = email
+    if phone is not None:
+        branch.phone = phone
     if is_primary is not None:
         branch.is_primary = is_primary
     db.commit()
     db.refresh(branch)
     return branch
+
+
+def branch_out_dict(branch: Branch, section_count: int = 0) -> dict:
+    return {
+        "id": branch.id,
+        "name": branch.name,
+        "address": branch.address,
+        "city": branch.city,
+        "state": branch.state or "",
+        "postalCode": branch.postal_code or "",
+        "email": branch.email or "",
+        "phone": branch.phone or "",
+        "isPrimary": branch.is_primary,
+        "sectionCount": section_count,
+    }
 
 
 def delete_branch(db: Session, institute_id: str, branch_id: str) -> None:

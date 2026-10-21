@@ -594,6 +594,38 @@ def migrate_mvp_domains(engine: Engine) -> None:
         )
 
 
+def migrate_institute_profile(engine: Engine) -> None:
+    with engine.begin() as conn:
+        for table, columns in (
+            (
+                "institutes",
+                (
+                    ("description", "TEXT DEFAULT ''"),
+                    ("email", "VARCHAR(200) DEFAULT ''"),
+                    ("phone", "VARCHAR(32) DEFAULT ''"),
+                    ("website", "VARCHAR(300) DEFAULT ''"),
+                    ("address", "VARCHAR(500) DEFAULT ''"),
+                    ("city", "VARCHAR(100) DEFAULT ''"),
+                    ("state", "VARCHAR(100) DEFAULT ''"),
+                    ("postal_code", "VARCHAR(20) DEFAULT ''"),
+                ),
+            ),
+            (
+                "branches",
+                (
+                    ("state", "VARCHAR(100) DEFAULT ''"),
+                    ("postal_code", "VARCHAR(20) DEFAULT ''"),
+                    ("email", "VARCHAR(200) DEFAULT ''"),
+                    ("phone", "VARCHAR(32) DEFAULT ''"),
+                ),
+            ),
+        ):
+            for column, definition in columns:
+                conn.execute(
+                    text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {definition}")
+                )
+
+
 def migrate_parent_guardian_messaging(engine: Engine) -> None:
     with engine.begin() as conn:
         conn.execute(
@@ -620,6 +652,18 @@ def migrate_parent_guardian_messaging(engine: Engine) -> None:
                     body TEXT NOT NULL,
                     sent_at TIMESTAMPTZ DEFAULT NOW()
                 );
+                """
+            )
+        )
+
+
+def migrate_section_class_teacher(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                ALTER TABLE sections
+                ADD COLUMN IF NOT EXISTS class_teacher_user_id VARCHAR(64)
                 """
             )
         )

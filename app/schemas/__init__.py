@@ -265,6 +265,10 @@ class BranchSummaryOut(BaseModel):
     isPrimary: bool
     address: str
     city: str
+    state: str = ""
+    postalCode: str = ""
+    email: str = ""
+    phone: str = ""
     teacherCount: int
     studentCount: int
     teachers: list[BranchTeacherBrief]
@@ -390,10 +394,52 @@ class UserSearchOut(BaseModel):
     displayName: str
 
 
+class InstituteProfileOut(BaseModel):
+    id: str
+    name: str
+    joinCode: str
+    description: str = ""
+    email: str = ""
+    phone: str = ""
+    website: str = ""
+    address: str = ""
+    city: str = ""
+    state: str = ""
+    postalCode: str = ""
+
+
+class InstituteProfileUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=2, max_length=200)
+    description: str | None = None
+    email: str | None = None
+    phone: str | None = None
+    website: str | None = None
+    address: str | None = None
+    city: str | None = None
+    state: str | None = None
+    postalCode: str | None = None
+
+
+class CampusScopeBranchOut(BaseModel):
+    id: str
+    name: str
+    isPrimary: bool
+
+
+class CampusScopeOut(BaseModel):
+    branches: list[CampusScopeBranchOut]
+    canSwitch: bool
+    defaultBranchId: str | None = None
+
+
 class BranchCreate(BaseModel):
     name: str = Field(min_length=2, max_length=200)
     address: str = ""
     city: str = ""
+    state: str = ""
+    postalCode: str = ""
+    email: str = ""
+    phone: str = ""
     isPrimary: bool = False
 
 
@@ -401,6 +447,10 @@ class BranchUpdate(BaseModel):
     name: str | None = None
     address: str | None = None
     city: str | None = None
+    state: str | None = None
+    postalCode: str | None = None
+    email: str | None = None
+    phone: str | None = None
     isPrimary: bool | None = None
 
 
@@ -409,6 +459,10 @@ class BranchOut(BaseModel):
     name: str
     address: str
     city: str
+    state: str = ""
+    postalCode: str = ""
+    email: str = ""
+    phone: str = ""
     isPrimary: bool
     sectionCount: int = 0
 
@@ -425,6 +479,11 @@ class SectionOut(BaseModel):
     className: str
     branchId: str | None = None
     branchName: str | None = None
+    classTeacherUserId: str | None = None
+
+
+class SectionClassTeacherUpdate(BaseModel):
+    userId: str | None = None
 
 
 class AssignMember(BaseModel):

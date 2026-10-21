@@ -16,6 +16,14 @@ class Institute(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     name: Mapped[str] = mapped_column(String(200))
     join_code: Mapped[str] = mapped_column(String(12), unique=True, index=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+    email: Mapped[str] = mapped_column(String(200), default="")
+    phone: Mapped[str] = mapped_column(String(32), default="")
+    website: Mapped[str] = mapped_column(String(300), default="")
+    address: Mapped[str] = mapped_column(String(500), default="")
+    city: Mapped[str] = mapped_column(String(100), default="")
+    state: Mapped[str] = mapped_column(String(100), default="")
+    postal_code: Mapped[str] = mapped_column(String(20), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -27,6 +35,10 @@ class Branch(Base):
     name: Mapped[str] = mapped_column(String(200))
     address: Mapped[str] = mapped_column(String(500), default="")
     city: Mapped[str] = mapped_column(String(100), default="")
+    state: Mapped[str] = mapped_column(String(100), default="")
+    postal_code: Mapped[str] = mapped_column(String(20), default="")
+    email: Mapped[str] = mapped_column(String(200), default="")
+    phone: Mapped[str] = mapped_column(String(32), default="")
     is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
@@ -219,6 +231,7 @@ class Section(Base):
     branch_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("branches.id"), nullable=True)
     name: Mapped[str] = mapped_column(String(200))
     class_name: Mapped[str] = mapped_column(String(200), default="")
+    class_teacher_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class SectionMember(Base):

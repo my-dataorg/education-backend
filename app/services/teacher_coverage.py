@@ -19,6 +19,23 @@ def list_absences(db: Session, institute_id: str, absence_date):
     )
 
 
+def list_absences_between(
+    db: Session,
+    institute_id: str,
+    start_date,
+    end_date,
+    teacher_id: str | None = None,
+):
+    stmt = select(TeacherAbsence).where(
+        TeacherAbsence.institute_id == institute_id,
+        TeacherAbsence.absence_date >= start_date,
+        TeacherAbsence.absence_date <= end_date,
+    )
+    if teacher_id:
+        stmt = stmt.where(TeacherAbsence.teacher_id == teacher_id)
+    return list(db.scalars(stmt.order_by(TeacherAbsence.absence_date, TeacherAbsence.teacher_id)))
+
+
 def save_absence(db: Session, institute_id: str, body) -> TeacherAbsence:
     teacher = db.scalar(
         select(InstituteMember).where(
