@@ -1367,18 +1367,37 @@ def read_timetable(
             member.role == "principal" and principal_can_edit_timetable(db, institute_id)
         )
         effective_state = state if can_view_draft else "published"
-        effective_view = view
+        effective_view = view if view in {"class", "teacher", "room"} else "class"
         effective_id = id
-        if not can_view_draft and member.role in TEACHING_STAFF_ROLES:
-            effective_view = "teacher"
-            effective_id = user["id"]
-        elif not can_view_draft and member.role == STUDENT_ROLE:
-            effective_view = "class"
+        if not can_view_draft:
             if not effective_id:
-                section_id = db.scalar(
-                    select(SectionMember.section_id).where(SectionMember.user_id == user["id"]).limit(1)
+                if member.role in TEACHING_STAFF_ROLES:
+                    effective_view = "teacher"
+                    effective_id = user["id"]
+                elif member.role == STUDENT_ROLE:
+                    effective_view = "class"
+                    effective_id = db.scalar(
+                        select(SectionMember.section_id).where(SectionMember.user_id == user["id"]).limit(1)
+                    )
+            elif effective_view == "class":
+                section_ok = db.scalar(
+                    select(Section.id).where(
+                        Section.id == effective_id,
+                        Section.institute_id == institute_id,
+                    )
                 )
-                effective_id = section_id
+                if not section_ok:
+                    raise HTTPException(status_code=404, detail="Section not found")
+            elif effective_view == "teacher":
+                teacher_ok = db.scalar(
+                    select(InstituteMember.user_id).where(
+                        InstituteMember.institute_id == institute_id,
+                        InstituteMember.user_id == effective_id,
+                        InstituteMember.role.in_(TEACHING_STAFF_ROLES),
+                    )
+                )
+                if not teacher_ok:
+                    raise HTTPException(status_code=404, detail="Teacher not found")
         return get_timetable(
             db,
             institute_id,

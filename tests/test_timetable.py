@@ -312,6 +312,37 @@ def test_principal_can_patch_cell(db: Session, client: TestClient):
     assert response.json()["cells"][0]["room"] == "Lab 1"
 
 
+def test_teacher_can_browse_class_timetable_published(db: Session, client: TestClient):
+    institute = add_institute(db, "owner", "owner")
+    section = Section(id="section-1", institute_id=institute.id, name="A", class_name="9")
+    subject = Subject(id="english", institute_id=institute.id, name="English")
+    db.add_all(
+        [
+            section,
+            subject,
+            SectionSubject(section_id=section.id, subject_id=subject.id),
+            InstituteMember(institute_id=institute.id, user_id="teacher-1", role="teacher"),
+        ]
+    )
+    seed_schedule(db, institute.id, section.id, subject.id)
+    publish_timetable(db, institute.id)
+
+    main.app.dependency_overrides[main.require_education_subscription] = (
+        lambda: {"id": "teacher-1", "email": "t@example.com", "token": "test"}
+    )
+
+    response = client.get(
+        f"/v1/institutes/{institute.id}/timetable",
+        params={"view": "class", "id": section.id, "state": "published"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["view"] == "class"
+    assert body["itemId"] == section.id
+    assert len(body["cells"]) == 1
+
+
 def test_student_reads_published_schedule_only(db: Session, client: TestClient):
     institute = add_institute(db, "owner", "owner")
     section = Section(id="section-1", institute_id=institute.id, name="A", class_name="9")
