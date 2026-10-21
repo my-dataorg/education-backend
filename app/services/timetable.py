@@ -121,7 +121,25 @@ def detect_clashes(db: Session, institute_id: str) -> list[dict]:
                         "message": f"Room {entry.room} is double booked",
                     }
                 )
+            if entry.section_id == other.section_id:
+                clash_index += 1
+                clashes.append(
+                    {
+                        "clashId": f"section-{clash_index}",
+                        "type": "section",
+                        "day": entry.day_of_week,
+                        "periodNo": period_no,
+                        "sectionIds": [entry.section_id],
+                        "message": "Class has two lessons scheduled at the same time",
+                    }
+                )
+    return clashes
 
+
+def detect_period_limit_warnings(db: Session, institute_id: str) -> list[dict]:
+    entries = list(
+        db.scalars(select(TimetableEntry).where(TimetableEntry.institute_id == institute_id))
+    )
     section_subject_limits = {
         (link.section_id, link.subject_id): link.weekly_periods
         for link in db.scalars(
@@ -134,26 +152,32 @@ def detect_clashes(db: Session, institute_id: str) -> list[dict]:
         usage[(entry.section_id, entry.subject_id)] = (
             usage.get((entry.section_id, entry.subject_id), 0) + 1
         )
+    warnings: list[dict] = []
+    warning_index = 0
     for (section_id, subject_id), count in usage.items():
         limit = section_subject_limits.get((section_id, subject_id))
         if limit is not None and count > limit:
-            clash_index += 1
+            warning_index += 1
             subject_name = db.scalar(select(Subject.name).where(Subject.id == subject_id)) or ""
-            clashes.append(
+            warnings.append(
                 {
-                    "clashId": f"subject_count-{clash_index}",
-                    "type": "subject_count",
-                    "day": 0,
-                    "periodNo": 0,
+                    "warningId": f"period_limit-{warning_index}",
                     "sectionIds": [section_id],
-                    "message": f"{subject_name} has {count} periods but only {limit} are allowed",
+                    "subjectId": subject_id,
+                    "scheduledCount": count,
+                    "allowedCount": limit,
+                    "message": f"{subject_name} has {count} periods scheduled but only {limit} are allowed per week",
                 }
             )
-    return clashes
+    return warnings
 
 
 def list_clashes(db: Session, institute_id: str) -> dict:
     return {"items": detect_clashes(db, institute_id)}
+
+
+def list_period_limit_warnings(db: Session, institute_id: str) -> dict:
+    return {"items": detect_period_limit_warnings(db, institute_id)}
 
 
 def _load_entries(
@@ -174,13 +198,14 @@ def _load_entries(
 
 def _cell_status(entry, clashes: list[dict], section_id: str, slot_id: str, day: int) -> tuple[str, str | None]:
     for clash in clashes:
-        if clash["day"] == day and section_id in clash.get("sectionIds", []):
-            if clash["type"] in {"teacher", "room"}:
-                entry_slots = {slot_id}
-                if clash.get("teacherId") == entry.teacher_id or clash.get("room") == entry.room:
-                    return "clash", clash["message"]
-            if clash["type"] == "subject_count" and entry.section_id == section_id:
-                return "clash", clash["message"]
+        if clash["day"] != day or section_id not in clash.get("sectionIds", []):
+            continue
+        if clash["type"] == "teacher" and clash.get("teacherId") == entry.teacher_id:
+            return "clash", clash["message"]
+        if clash["type"] == "room" and clash.get("room") == entry.room:
+            return "clash", clash["message"]
+        if clash["type"] == "section":
+            return "clash", clash["message"]
     if entry.locked:
         return "locked", None
     return "ok", None
@@ -750,7 +775,7 @@ def save_substitutions(db: Session, institute_id: str, target: date, rows: list)
 def publish_timetable(db: Session, institute_id: str) -> dict:
     clashes = detect_clashes(db, institute_id)
     if clashes:
-        raise ValueError("Fix clashes before publishing")
+        raise ValueError("Fix scheduling clashes before publishing")
 
     settings = db.get(ScheduleSettings, institute_id)
     if not settings:

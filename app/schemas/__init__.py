@@ -759,6 +759,19 @@ class TimetableClashesOut(BaseModel):
     items: list[TimetableClashOut]
 
 
+class TimetablePeriodLimitWarningOut(BaseModel):
+    warningId: str
+    sectionIds: list[str]
+    subjectId: str | None = None
+    scheduledCount: int
+    allowedCount: int
+    message: str
+
+
+class TimetablePeriodLimitWarningsOut(BaseModel):
+    items: list[TimetablePeriodLimitWarningOut]
+
+
 class TimetableTeacherLoadItemOut(BaseModel):
     teacherId: str
     name: str = ""

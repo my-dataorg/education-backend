@@ -138,6 +138,7 @@ from app.schemas import (
     ScheduleUpdate,
     TimetableCellPatch,
     TimetableClashesOut,
+    TimetablePeriodLimitWarningsOut,
     TimetableOut,
     TimetablePublishOut,
     TimetableTeacherLoadOut,
@@ -222,6 +223,7 @@ from app.services.timetable import (
     accept_auto_fill,
     get_timetable,
     list_clashes,
+    list_period_limit_warnings,
     list_substitutions,
     patch_cell,
     preview_auto_fill,
@@ -1416,6 +1418,22 @@ def read_timetable_clashes(
     try:
         require_timetable_view(db, institute_id, user["id"])
         return list_clashes(db, institute_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+
+
+@app.get(
+    "/v1/institutes/{institute_id}/timetable/period-limit-warnings",
+    response_model=TimetablePeriodLimitWarningsOut,
+)
+def read_timetable_period_limit_warnings(
+    institute_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_timetable_view(db, institute_id, user["id"])
+        return list_period_limit_warnings(db, institute_id)
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
 

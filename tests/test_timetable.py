@@ -20,7 +20,11 @@ from app.models import (
     Subject,
     TimetableEntry,
 )
-from app.services.timetable import detect_clashes, publish_timetable
+from app.services.timetable import (
+    detect_clashes,
+    detect_period_limit_warnings,
+    publish_timetable,
+)
 
 
 @pytest.fixture
@@ -132,6 +136,106 @@ def test_detect_clashes_for_teacher_double_booked(db: Session):
     clashes = detect_clashes(db, institute.id)
 
     assert any(clash["type"] == "teacher" for clash in clashes)
+
+
+def test_period_limit_is_warning_not_clash(db: Session):
+    institute = add_institute(db, "owner", "owner")
+    section = Section(id="section-a", institute_id=institute.id, name="A", class_name="10")
+    subject = Subject(id="english", institute_id=institute.id, name="English")
+    db.add_all([section, subject, SectionSubject(section_id=section.id, subject_id=subject.id, weekly_periods=1)])
+    db.add(ScheduleSettings(institute_id=institute.id, weekdays="1,2,3,4,5"))
+    slots = []
+    for index in range(2):
+        slots.append(
+            ScheduleSlot(
+                id=f"slot-{index}",
+                institute_id=institute.id,
+                label=f"P{index + 1}",
+                kind="instruction",
+                start_time=datetime.strptime(f"{8 + index}:00", "%H:%M").time(),
+                end_time=datetime.strptime(f"{8 + index}:45", "%H:%M").time(),
+                position=index,
+            )
+        )
+    db.add_all(slots)
+    for slot in slots:
+        db.add(
+            TimetableEntry(
+                institute_id=institute.id,
+                slot_id=slot.id,
+                day_of_week=1,
+                section_id=section.id,
+                subject_id=subject.id,
+                teacher_id=f"teacher-{slot.id}",
+            )
+        )
+    db.commit()
+
+    clashes = detect_clashes(db, institute.id)
+    warnings = detect_period_limit_warnings(db, institute.id)
+
+    assert not clashes
+    assert len(warnings) == 1
+    publish_timetable(db, institute.id)
+
+
+def test_detect_clashes_when_class_double_booked(db: Session):
+    institute = add_institute(db, "owner", "owner")
+    section = Section(id="section-a", institute_id=institute.id, name="A", class_name="10")
+    subjects = [
+        Subject(id="english", institute_id=institute.id, name="English"),
+        Subject(id="math", institute_id=institute.id, name="Math"),
+    ]
+    db.add_all([section, *subjects])
+    for subject in subjects:
+        db.add(SectionSubject(section_id=section.id, subject_id=subject.id))
+    db.add(ScheduleSettings(institute_id=institute.id, weekdays="1"))
+    overlapping_slots = [
+        ScheduleSlot(
+            id="slot-1",
+            institute_id=institute.id,
+            label="P1",
+            kind="instruction",
+            start_time=datetime.strptime("08:00", "%H:%M").time(),
+            end_time=datetime.strptime("08:50", "%H:%M").time(),
+            position=0,
+        ),
+        ScheduleSlot(
+            id="slot-2",
+            institute_id=institute.id,
+            label="P2",
+            kind="instruction",
+            start_time=datetime.strptime("08:40", "%H:%M").time(),
+            end_time=datetime.strptime("09:25", "%H:%M").time(),
+            position=1,
+        ),
+    ]
+    db.add_all(overlapping_slots)
+    db.add_all(
+        [
+            TimetableEntry(
+                institute_id=institute.id,
+                slot_id="slot-1",
+                day_of_week=1,
+                section_id=section.id,
+                subject_id=subjects[0].id,
+                teacher_id="teacher-a",
+            ),
+            TimetableEntry(
+                institute_id=institute.id,
+                slot_id="slot-2",
+                day_of_week=1,
+                section_id=section.id,
+                subject_id=subjects[1].id,
+                teacher_id="teacher-b",
+            ),
+        ]
+    )
+    db.commit()
+
+    clashes = detect_clashes(db, institute.id)
+
+    assert any(clash["type"] == "section" for clash in clashes)
 
 
 def test_publish_blocked_when_clash_exists(db: Session):
