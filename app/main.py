@@ -8,7 +8,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_user, require_education_subscription
-from app.roles import MANAGE_ROLES, TIMETABLE_EDIT_ROLES
+from app.roles import MANAGE_ROLES, STUDENT_ROLE, TIMETABLE_EDIT_ROLES
 from app.config import settings
 from app.db.migrate import (
     migrate_invitations,
@@ -1357,8 +1357,33 @@ def read_timetable(
     user: User = Depends(require_education_subscription),
 ):
     try:
-        require_timetable_view(db, institute_id, user["id"])
-        return get_timetable(db, institute_id, view=view, item_id=id, state=state)
+        from app.roles import TEACHING_STAFF_ROLES
+        from app.services.institutes import principal_can_edit_timetable
+
+        member = require_timetable_view(db, institute_id, user["id"])
+        can_view_draft = member.role in TIMETABLE_EDIT_ROLES or (
+            member.role == "principal" and principal_can_edit_timetable(db, institute_id)
+        )
+        effective_state = state if can_view_draft else "published"
+        effective_view = view
+        effective_id = id
+        if not can_view_draft and member.role in TEACHING_STAFF_ROLES:
+            effective_view = "teacher"
+            effective_id = user["id"]
+        elif not can_view_draft and member.role == STUDENT_ROLE:
+            effective_view = "class"
+            if not effective_id:
+                section_id = db.scalar(
+                    select(SectionMember.section_id).where(SectionMember.user_id == user["id"]).limit(1)
+                )
+                effective_id = section_id
+        return get_timetable(
+            db,
+            institute_id,
+            view=effective_view,
+            item_id=effective_id,
+            state=effective_state,
+        )
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
 

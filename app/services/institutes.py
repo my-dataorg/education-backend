@@ -21,7 +21,7 @@ from app.models import (
     TeacherSubjectAssignment,
     TimetableEntry,
 )
-from app.roles import MANAGE_ROLES, STAFF_ROLES, STUDENT_ROLE, VIEW_DIRECTORY_ROLES
+from app.roles import MANAGE_ROLES, STAFF_ROLES, STUDENT_ROLE, TEACHING_STAFF_ROLES, VIEW_DIRECTORY_ROLES
 from app.services.user_identity import enrich_rows
 
 
@@ -89,7 +89,9 @@ def require_timetable_view(db: Session, institute_id: str, user_id: str) -> Inst
     member = require_membership(db, institute_id, user_id)
     if member.role in MANAGE_ROLES or member.role == "principal":
         return member
-    raise PermissionError("Owner, admin, or principal role required")
+    if member.role in TEACHING_STAFF_ROLES or member.role == STUDENT_ROLE:
+        return member
+    raise PermissionError("Institute membership required")
 
 
 def list_user_institutes(db: Session, user_id: str) -> list[Institute]:
