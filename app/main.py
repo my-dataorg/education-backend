@@ -28,6 +28,8 @@ from app.db.migrate import (
     migrate_institute_profile,
     migrate_parent_guardian_messaging,
     migrate_section_class_teacher,
+    migrate_section_attendance_days,
+    migrate_student_leave_requests,
     run_migrations,
     seed_default_activities,
     seed_default_branches,
@@ -134,6 +136,10 @@ from app.schemas import (
     SectionOut,
     SectionClassTeacherUpdate,
     SectionOverviewOut,
+    SectionClassDashboardOut,
+    AttendanceSheetOut,
+    StudentLeaveRequestOut,
+    AttendancePresentSyncIn,
     ScheduleOut,
     ScheduleUpdate,
     TimetableCellPatch,
@@ -200,6 +206,9 @@ from app.services.subject_teachers import (
 )
 from app.services.campus_scope import get_campus_scope
 from app.services.overview import get_owner_overview
+from app.services.attendance_sheet import get_section_attendance_sheet, save_present_only_attendance
+from app.services.student_leave import list_section_leave_requests
+from app.services.section_class_dashboard import get_section_class_dashboard
 from app.services.sections import (
     assign_section_member,
     bulk_assign_section_members,
@@ -217,6 +226,7 @@ from app.services.sections import (
     require_section_student,
     require_daily_note_editor,
     require_section_teacher,
+    assert_can_mark_attendance,
 )
 from app.services.schedule import get_schedule, replace_schedule
 from app.services.timetable import (
@@ -309,6 +319,8 @@ async def lifespan(_: FastAPI):
     migrate_parent_guardian_messaging(engine)
     migrate_institute_profile(engine)
     migrate_section_class_teacher(engine)
+    migrate_section_attendance_days(engine)
+    migrate_student_leave_requests(engine)
     with SessionLocal() as db:
         seed_default_branches(db)
         seed_default_activities(db)
@@ -2244,6 +2256,20 @@ def section_overview(
     return SectionOverviewOut(**data)
 
 
+@app.get("/v1/sections/{section_id}/class-dashboard", response_model=SectionClassDashboardOut)
+def section_class_dashboard(
+    section_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        return get_section_class_dashboard(db, section_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
 @app.get("/v1/sections/{section_id}/student-insights")
 def section_student_insights(
     section_id: str,
@@ -2314,6 +2340,72 @@ def assign_teacher(
     return {"sectionId": section_id, "userId": body.userId, "type": "teacher"}
 
 
+@app.get("/v1/sections/{section_id}/attendance/sheet", response_model=AttendanceSheetOut)
+def section_attendance_sheet(
+    section_id: str,
+    days: int = Query(7, ge=1, le=366),
+    end_date: date | None = Query(None, alias="endDate"),
+    summary_period: str = Query("academic_year", alias="summaryPeriod"),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        return get_section_attendance_sheet(
+            db,
+            section_id,
+            user["id"],
+            days=days,
+            end_date=end_date,
+            summary_period=summary_period,
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@app.get(
+    "/v1/sections/{section_id}/leave-requests",
+    response_model=list[StudentLeaveRequestOut],
+)
+def section_leave_requests(
+    section_id: str,
+    status: str | None = Query(None, pattern="^(pending|approved|rejected)$"),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        return list_section_leave_requests(db, section_id, user["id"], status=status)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@app.put("/v1/sections/{section_id}/attendance/present-sync", response_model=list[AttendanceOut])
+def sync_present_attendance(
+    section_id: str,
+    body: AttendancePresentSyncIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        save_present_only_attendance(
+            db,
+            section_id,
+            user["id"],
+            body.attendanceDate,
+            body.presentStudentIds,
+            body.excusedStudentIds,
+            body.publishState,
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return list_attendance(section_id, body.attendanceDate, db, user)
+
+
 @app.get("/v1/sections/{section_id}/attendance", response_model=list[AttendanceOut])
 def list_attendance(
     section_id: str,
@@ -2357,7 +2449,8 @@ def save_attendance(
     user: User = Depends(require_education_subscription),
 ):
     try:
-        require_section_teacher(db, section_id, user["id"])
+        section = require_section_teacher(db, section_id, user["id"])
+        assert_can_mark_attendance(db, section, user["id"], body.attendanceDate)
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ValueError as e:

@@ -14,6 +14,19 @@ def _default_dates() -> tuple[date, date]:
     return date(year, 4, 1), date(year + 1, 3, 31)
 
 
+def get_active_academic_year_bounds(db: Session, institute_id: str) -> tuple[date, date, str]:
+    """Read-only active year range for teachers (no auto-create)."""
+    year = db.scalar(
+        select(AcademicYear)
+        .where(AcademicYear.institute_id == institute_id, AcademicYear.is_active.is_(True))
+        .order_by(AcademicYear.start_date.desc())
+    )
+    if year:
+        return year.start_date, year.end_date, year.label
+    start_date, end_date = _default_dates()
+    return start_date, end_date, f"{start_date.year}-{str(end_date.year)[-2:]}"
+
+
 def get_or_create_active(db: Session, institute_id: str, user_id: str) -> AcademicYear:
     require_manage(db, institute_id, user_id)
     year = db.scalar(

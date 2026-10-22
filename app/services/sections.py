@@ -1,3 +1,5 @@
+from datetime import date
+
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
@@ -261,6 +263,43 @@ def _is_section_teacher(db: Session, section_id: str, user_id: str) -> bool:
             )
         )
     )
+
+
+def can_take_attendance_today(db: Session, section: Section, user_id: str) -> bool:
+    member = get_membership(db, section.institute_id, user_id)
+    if member and member.role in MANAGE_ROLES:
+        return True
+    if section.class_teacher_user_id:
+        return section.class_teacher_user_id == user_id
+    return _is_section_teacher(db, section.id, user_id)
+
+
+def can_edit_past_attendance(db: Session, section: Section, user_id: str) -> bool:
+    member = get_membership(db, section.institute_id, user_id)
+    return bool(member and member.role in MANAGE_ROLES)
+
+
+def assert_can_mark_attendance(
+    db: Session, section: Section, user_id: str, attendance_date: date
+) -> None:
+    today = date.today()
+    if attendance_date > today:
+        raise PermissionError("Cannot mark attendance for a future date")
+    if attendance_date < today:
+        if not can_edit_past_attendance(db, section, user_id):
+            raise PermissionError(
+                "Only the school owner or admin can update attendance for previous days"
+            )
+        return
+    if not can_take_attendance_today(db, section, user_id):
+        raise PermissionError("Only the class teacher can take attendance for today")
+
+
+def attendance_mark_permissions(db: Session, section: Section, user_id: str) -> dict:
+    return {
+        "canEditPastAttendance": can_edit_past_attendance(db, section, user_id),
+        "canTakeAttendanceToday": can_take_attendance_today(db, section, user_id),
+    }
 
 
 def can_edit_daily_notes(db: Session, section: Section, user_id: str) -> bool:
@@ -533,8 +572,18 @@ def get_student_attendance(
     output = []
     for record in records:
         counts[record.status] = counts.get(record.status, 0) + 1
-        output.append({"date": record.attendance_date, "status": record.status})
-    return {"studentId": student_id, "summary": counts, "records": output}
+        output.append({"date": record.attendance_date.isoformat(), "status": record.status})
+    from app.services.student_leave import list_student_leave_in_range  # noqa: PLC0415
+
+    leave_requests = list_student_leave_in_range(
+        db, section_id, student_id, user_id, start_date, end_date
+    )
+    return {
+        "studentId": student_id,
+        "summary": counts,
+        "records": output,
+        "leaveRequests": leave_requests,
+    }
 
 
 def _require_student(db: Session, section_id: str, student_id: str) -> None:

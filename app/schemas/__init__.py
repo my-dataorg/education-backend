@@ -948,6 +948,16 @@ class SectionOverviewOut(BaseModel):
     teachers: list[dict] | None = None
 
 
+class SectionClassDashboardOut(BaseModel):
+    absenceAlertDays: int
+    todayAttendance: dict
+    prolongedAbsence: list[dict]
+    upcomingExams: list[dict]
+    notices: list[dict]
+    awards: list[dict]
+    events: list[dict]
+
+
 class NoteCreate(BaseModel):
     content: str
 
@@ -1168,6 +1178,47 @@ class AttendanceRecordIn(BaseModel):
 class AttendanceUpdate(BaseModel):
     attendanceDate: date
     records: list[AttendanceRecordIn]
+
+
+class AttendancePresentSyncIn(BaseModel):
+    attendanceDate: date
+    presentStudentIds: list[str] = Field(default_factory=list)
+    excusedStudentIds: list[str] = Field(default_factory=list)
+    publishState: str = Field(default="submitted", pattern="^(draft|submitted)$")
+
+
+class AttendanceTotalsOut(BaseModel):
+    present: int = 0
+    absent: int = 0
+    late: int = 0
+    excused: int = 0
+    unmarked: int = 0
+
+
+class AttendanceSheetOut(BaseModel):
+    startDate: str
+    endDate: str
+    dates: list[str]
+    students: list[dict]
+    statusByStudent: dict[str, dict[str, str]]
+    totalsByStudent: dict[str, AttendanceTotalsOut] = Field(default_factory=dict)
+    totalsLabel: str = "Academic year"
+    totalsStartDate: str | None = None
+    totalsEndDate: str | None = None
+    canEditPastAttendance: bool = False
+    canTakeAttendanceToday: bool = False
+    publishStateByDate: dict[str, str] = Field(default_factory=dict)
+
+
+class StudentLeaveRequestOut(BaseModel):
+    id: str
+    studentId: str
+    studentName: str | None = None
+    startDate: str
+    endDate: str
+    reason: str
+    status: str
+    createdAt: str | None = None
 
 
 class AttendanceOut(BaseModel):

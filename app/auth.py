@@ -67,13 +67,27 @@ async def get_current_user(
             key = _find_jwk(jwks, header["kid"])
         if key is None:
             raise JWTError("Signing key not found")
-        payload = jwt.decode(
-            creds.credentials,
-            key,
-            algorithms=[header["alg"]],
-            issuer=settings.issuer,
-            options={"verify_aud": False},
-        )
+
+        def decode_with_key(jwks: dict) -> dict:
+            signing_key = _find_jwk(jwks, header["kid"])
+            if signing_key is None:
+                raise JWTError("Signing key not found")
+            payload = jwt.decode(
+                creds.credentials,
+                signing_key,
+                algorithms=[header["alg"]],
+                options={"verify_aud": False, "verify_iss": False},
+            )
+            token_iss = payload.get("iss")
+            if token_iss not in settings.trusted_issuers():
+                raise JWTError("Invalid issuer")
+            return payload
+
+        try:
+            payload = decode_with_key(jwks)
+        except JWTError:
+            jwks = await _get_jwks(force_refresh=True)
+            payload = decode_with_key(jwks)
     except (JWTError, httpx.HTTPError) as e:
         raise HTTPException(status_code=401, detail="Invalid token") from e
 

@@ -363,8 +363,17 @@ def migrate_institute_role_settings(engine: Engine) -> None:
                 """
                 CREATE TABLE IF NOT EXISTS institute_role_settings (
                     institute_id VARCHAR(36) PRIMARY KEY REFERENCES institutes(id),
-                    principal_can_edit_timetable BOOLEAN NOT NULL DEFAULT TRUE
+                    principal_can_edit_timetable BOOLEAN NOT NULL DEFAULT TRUE,
+                    absence_alert_days INTEGER NOT NULL DEFAULT 3
                 );
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                ALTER TABLE institute_role_settings
+                ADD COLUMN IF NOT EXISTS absence_alert_days INTEGER NOT NULL DEFAULT 3
                 """
             )
         )
@@ -664,6 +673,46 @@ def migrate_section_class_teacher(engine: Engine) -> None:
                 """
                 ALTER TABLE sections
                 ADD COLUMN IF NOT EXISTS class_teacher_user_id VARCHAR(64)
+                """
+            )
+        )
+
+
+def migrate_section_attendance_days(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS section_attendance_days (
+                  section_id VARCHAR(36) NOT NULL REFERENCES sections(id),
+                  attendance_date DATE NOT NULL,
+                  publish_state VARCHAR(16) NOT NULL DEFAULT 'submitted',
+                  marked_by VARCHAR(64) NOT NULL,
+                  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                  PRIMARY KEY (section_id, attendance_date)
+                );
+                """
+            )
+        )
+
+
+def migrate_student_leave_requests(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS student_leave_requests (
+                  id VARCHAR(36) PRIMARY KEY,
+                  section_id VARCHAR(36) NOT NULL REFERENCES sections(id),
+                  student_id VARCHAR(64) NOT NULL,
+                  start_date DATE NOT NULL,
+                  end_date DATE NOT NULL,
+                  reason TEXT NOT NULL DEFAULT '',
+                  status VARCHAR(16) NOT NULL DEFAULT 'pending',
+                  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+                CREATE INDEX IF NOT EXISTS student_leave_requests_section_idx
+                  ON student_leave_requests(section_id, status);
                 """
             )
         )
