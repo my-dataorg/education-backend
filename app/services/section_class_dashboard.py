@@ -75,6 +75,12 @@ def get_section_class_dashboard(db: Session, section_id: str, user_id: str) -> d
             )
         )
     by_student_today = {row.student_id: row.status for row in today_rows}
+    if today_day and can_view_attendance_for_date(db, section, today_day, user_id):
+        today_publish_state = today_day.publish_state
+    elif today_rows:
+        today_publish_state = "submitted"
+    else:
+        today_publish_state = None
     counts = {"present": 0, "absent": 0, "late": 0, "excused": 0, "unmarked": 0}
     today_students = []
     for student in students:
@@ -199,6 +205,7 @@ def get_section_class_dashboard(db: Session, section_id: str, user_id: str) -> d
             "totalStudents": len(students),
             "counts": counts,
             "students": today_students,
+            "publishState": today_publish_state,
         },
         "prolongedAbsence": prolonged,
         "upcomingExams": upcoming_exams,
