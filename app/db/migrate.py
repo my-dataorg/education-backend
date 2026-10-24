@@ -199,6 +199,22 @@ def migrate_activities(engine: Engine) -> None:
         )
 
 
+def migrate_institute_rooms(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS institute_rooms (
+                    id VARCHAR(36) PRIMARY KEY,
+                    institute_id VARCHAR(36) NOT NULL REFERENCES institutes(id),
+                    name VARCHAR(30) NOT NULL,
+                    UNIQUE (institute_id, name)
+                );
+                """
+            )
+        )
+
+
 def migrate_schedule(engine: Engine) -> None:
     with engine.begin() as conn:
         conn.execute(
@@ -696,6 +712,84 @@ def migrate_section_attendance_days(engine: Engine) -> None:
         )
 
 
+def migrate_assignment_works(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                ALTER TABLE assignments
+                  ADD COLUMN IF NOT EXISTS publish_state VARCHAR(16) NOT NULL DEFAULT 'published';
+                ALTER TABLE assignments
+                  ADD COLUMN IF NOT EXISTS publish_at TIMESTAMPTZ;
+                ALTER TABLE assignments
+                  ADD COLUMN IF NOT EXISTS due_at TIMESTAMPTZ;
+                ALTER TABLE assignments
+                  ADD COLUMN IF NOT EXISTS audience_type VARCHAR(16) NOT NULL DEFAULT 'section';
+                ALTER TABLE assignments
+                  ADD COLUMN IF NOT EXISTS instructions TEXT NOT NULL DEFAULT '';
+                ALTER TABLE assignments
+                  ADD COLUMN IF NOT EXISTS scores_visible BOOLEAN NOT NULL DEFAULT false;
+                ALTER TABLE assignments
+                  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+                CREATE TABLE IF NOT EXISTS assignment_audience_students (
+                  assignment_id VARCHAR(36) NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
+                  student_id VARCHAR(64) NOT NULL,
+                  PRIMARY KEY (assignment_id, student_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS assignment_questions (
+                  id VARCHAR(36) PRIMARY KEY,
+                  assignment_id VARCHAR(36) NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
+                  sort_order INT NOT NULL DEFAULT 0,
+                  question_type VARCHAR(32) NOT NULL,
+                  points DOUBLE PRECISION NOT NULL DEFAULT 1,
+                  required BOOLEAN NOT NULL DEFAULT true
+                );
+
+                CREATE TABLE IF NOT EXISTS assignment_question_variants (
+                  id VARCHAR(36) PRIMARY KEY,
+                  question_id VARCHAR(36) NOT NULL REFERENCES assignment_questions(id) ON DELETE CASCADE,
+                  variant_index INT NOT NULL DEFAULT 0,
+                  stem_text TEXT NOT NULL DEFAULT '',
+                  metadata_json TEXT NOT NULL DEFAULT '{}'
+                );
+
+                CREATE TABLE IF NOT EXISTS assignment_question_options (
+                  id VARCHAR(36) PRIMARY KEY,
+                  variant_id VARCHAR(36) NOT NULL REFERENCES assignment_question_variants(id) ON DELETE CASCADE,
+                  option_key VARCHAR(16) NOT NULL,
+                  label TEXT NOT NULL DEFAULT '',
+                  is_correct BOOLEAN NOT NULL DEFAULT false
+                );
+
+                CREATE TABLE IF NOT EXISTS assignment_attempts (
+                  id VARCHAR(36) PRIMARY KEY,
+                  assignment_id VARCHAR(36) NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
+                  student_id VARCHAR(64) NOT NULL,
+                  snapshot_json TEXT NOT NULL DEFAULT '{}',
+                  status VARCHAR(16) NOT NULL DEFAULT 'in_progress',
+                  submitted_at TIMESTAMPTZ,
+                  score DOUBLE PRECISION,
+                  max_score DOUBLE PRECISION,
+                  UNIQUE (assignment_id, student_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS assignment_responses (
+                  id VARCHAR(36) PRIMARY KEY,
+                  attempt_id VARCHAR(36) NOT NULL REFERENCES assignment_attempts(id) ON DELETE CASCADE,
+                  question_id VARCHAR(36) NOT NULL REFERENCES assignment_questions(id) ON DELETE CASCADE,
+                  answer_json TEXT NOT NULL DEFAULT '{}',
+                  auto_score DOUBLE PRECISION,
+                  teacher_score DOUBLE PRECISION,
+                  feedback TEXT NOT NULL DEFAULT '',
+                  UNIQUE (attempt_id, question_id)
+                );
+                """
+            )
+        )
+
+
 def migrate_student_leave_requests(engine: Engine) -> None:
     with engine.begin() as conn:
         conn.execute(
@@ -713,6 +807,27 @@ def migrate_student_leave_requests(engine: Engine) -> None:
                 );
                 CREATE INDEX IF NOT EXISTS student_leave_requests_section_idx
                   ON student_leave_requests(section_id, status);
+                """
+            )
+        )
+
+
+def migrate_timetable_school_defaults(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS timetable_school_defaults (
+                  id VARCHAR(36) PRIMARY KEY,
+                  institute_id VARCHAR(36) NOT NULL REFERENCES institutes(id),
+                  slot_id VARCHAR(36) NOT NULL REFERENCES schedule_slots(id),
+                  day_of_week INTEGER NOT NULL,
+                  subject_id VARCHAR(36) NOT NULL REFERENCES subjects(id),
+                  teacher_id VARCHAR(64),
+                  room VARCHAR(30),
+                  CONSTRAINT timetable_school_defaults_unique
+                    UNIQUE (institute_id, slot_id, day_of_week)
+                );
                 """
             )
         )

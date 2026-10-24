@@ -128,6 +128,34 @@ def test_post_section_subject_accepts_weekly_periods(db: Session, client: TestCl
     assert link.weekly_periods == 6
 
 
+def test_get_section_subjects_returns_linked_subjects(db: Session, client: TestClient):
+    institute, section_id, _, _, _ = seed_two_campuses(db)
+    teacher_a = "teacher-a"
+    subject = Subject(id="sub-list", institute_id=institute.id, name="English")
+    db.add(subject)
+    db.commit()
+
+    post = client.post(
+        f"/v1/sections/{section_id}/subjects",
+        json={"subjectId": subject.id},
+    )
+    assert post.status_code == 201
+
+    assign = client.post(
+        f"/v1/sections/{section_id}/subjects/{subject.id}/teachers",
+        json={"userId": teacher_a},
+    )
+    assert assign.status_code in (200, 201)
+
+    listed = client.get(f"/v1/sections/{section_id}/subjects")
+    assert listed.status_code == 200
+    rows = listed.json()
+    assert len(rows) == 1
+    assert rows[0]["id"] == subject.id
+    assert rows[0]["name"] == "English"
+    assert rows[0]["teachers"] == [{"userId": teacher_a}]
+
+
 def test_bulk_assign_section_members(db: Session, client: TestClient):
     institute, section_id, _, _, student_b = seed_two_campuses(db)
     db.add(InstituteMember(institute_id=institute.id, user_id="student-c", role="student"))

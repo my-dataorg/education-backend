@@ -13,6 +13,7 @@ from app.config import settings
 from app.db.migrate import (
     migrate_invitations,
     migrate_activities,
+    migrate_institute_rooms,
     migrate_join_requests,
     migrate_schedule,
     migrate_special_days,
@@ -24,11 +25,13 @@ from app.db.migrate import (
     migrate_timetable_publish,
     migrate_institute_role_settings,
     migrate_timetable_substitutions,
+    migrate_timetable_school_defaults,
     migrate_mvp_domains,
     migrate_institute_profile,
     migrate_parent_guardian_messaging,
     migrate_section_class_teacher,
     migrate_section_attendance_days,
+    migrate_assignment_works,
     migrate_student_leave_requests,
     run_migrations,
     seed_default_activities,
@@ -56,6 +59,8 @@ from app.schemas import (
     AssignMember,
     ActivityCreate,
     ActivityOut,
+    RoomCreate,
+    RoomOut,
     AttendanceOut,
     AttendanceUpdate,
     AssignmentCreate,
@@ -143,6 +148,8 @@ from app.schemas import (
     ScheduleOut,
     ScheduleUpdate,
     TimetableCellPatch,
+    TimetableSchoolCellPatch,
+    TimetableApplySchoolDefaultsIn,
     TimetableClashesOut,
     TimetablePeriodLimitWarningsOut,
     TimetableOut,
@@ -167,6 +174,12 @@ from app.schemas import (
     ParentThreadOut,
     ParentMessageCreate,
     ParentMessageOut,
+    AssignmentWorkCreate,
+    AssignmentWorkPatch,
+    AssignmentWorkPublishIn,
+    AssignmentQuestionsReplaceIn,
+    AssignmentResponsesPatchIn,
+    AssignmentGradeIn,
 )
 from app.services.institutes import (
     ADMIN_ROLES,
@@ -209,6 +222,22 @@ from app.services.overview import get_owner_overview
 from app.services.attendance_sheet import get_section_attendance_sheet, save_present_only_attendance
 from app.services.student_leave import list_section_leave_requests
 from app.services.section_class_dashboard import get_section_class_dashboard
+from app.services.section_assignments import (
+    create_work,
+    get_or_create_attempt,
+    get_work,
+    grade_attempt,
+    list_assigned_student,
+    list_questions_teacher,
+    list_submissions,
+    list_teacher_works,
+    patch_work,
+    publish_work,
+    replace_questions,
+    save_responses,
+    submit_attempt,
+    unpublish_work,
+)
 from app.services.sections import (
     assign_section_member,
     bulk_assign_section_members,
@@ -236,6 +265,8 @@ from app.services.timetable import (
     list_period_limit_warnings,
     list_substitutions,
     patch_cell,
+    patch_school_cell,
+    apply_school_defaults,
     preview_auto_fill,
     publish_timetable,
     save_substitutions,
@@ -257,6 +288,7 @@ from app.services.activities import (
     delete_activity,
     list_activities,
 )
+from app.services.rooms import create_room, delete_room, list_rooms
 from app.services.join_requests import (
     accept_join_request,
     create_join_request,
@@ -279,6 +311,7 @@ from app.services.subjects import (
     delete_subject,
     link_subject,
     list_section_subjects,
+    normalize_teacher_user_ids,
     list_subjects,
     update_section_subject_weekly_periods,
     unlink_subject,
@@ -306,6 +339,7 @@ async def lifespan(_: FastAPI):
     migrate_join_requests(engine)
     migrate_subjects(engine)
     migrate_activities(engine)
+    migrate_institute_rooms(engine)
     migrate_schedule(engine)
     migrate_special_days(engine)
     migrate_teacher_absences(engine)
@@ -315,11 +349,13 @@ async def lifespan(_: FastAPI):
     migrate_timetable_publish(engine)
     migrate_institute_role_settings(engine)
     migrate_timetable_substitutions(engine)
+    migrate_timetable_school_defaults(engine)
     migrate_mvp_domains(engine)
     migrate_parent_guardian_messaging(engine)
     migrate_institute_profile(engine)
     migrate_section_class_teacher(engine)
     migrate_section_attendance_days(engine)
+    migrate_assignment_works(engine)
     migrate_student_leave_requests(engine)
     with SessionLocal() as db:
         seed_default_branches(db)
@@ -1379,7 +1415,7 @@ def read_timetable(
             member.role == "principal" and principal_can_edit_timetable(db, institute_id)
         )
         effective_state = state if can_view_draft else "published"
-        effective_view = view if view in {"class", "teacher", "room"} else "class"
+        effective_view = view if view in {"class", "teacher", "room", "school"} else "class"
         effective_id = id
         if not can_view_draft:
             if not effective_id:
@@ -1431,6 +1467,38 @@ def update_timetable_cell(
     try:
         require_timetable_edit(db, institute_id, user["id"])
         return patch_cell(db, institute_id, body)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.patch("/v1/institutes/{institute_id}/timetable/school-cells", response_model=TimetableOut)
+def update_school_timetable_cell(
+    institute_id: str,
+    body: TimetableSchoolCellPatch,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_timetable_edit(db, institute_id, user["id"])
+        return patch_school_cell(db, institute_id, body)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.post("/v1/institutes/{institute_id}/timetable/apply-school-defaults")
+def apply_school_timetable_defaults(
+    institute_id: str,
+    body: TimetableApplySchoolDefaultsIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_timetable_edit(db, institute_id, user["id"])
+        return apply_school_defaults(db, institute_id, mode=body.mode)
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ValueError as e:
@@ -1879,6 +1947,54 @@ def add_activity(
     return ActivityOut(id=activity.id, name=activity.name)
 
 
+@app.get("/v1/institutes/{institute_id}/rooms", response_model=list[RoomOut])
+def get_rooms(
+    institute_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_membership(db, institute_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    return [RoomOut(id=room.id, name=room.name) for room in list_rooms(db, institute_id)]
+
+
+@app.post("/v1/institutes/{institute_id}/rooms", response_model=RoomOut, status_code=201)
+def add_room(
+    institute_id: str,
+    body: RoomCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_owner(db, institute_id, user["id"])
+        room = create_room(db, institute_id, body.name)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    return RoomOut(id=room.id, name=room.name)
+
+
+@app.delete("/v1/institutes/{institute_id}/rooms/{room_id}", status_code=204)
+def remove_room(
+    institute_id: str,
+    room_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_owner(db, institute_id, user["id"])
+        delete_room(db, institute_id, room_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        msg = str(e)
+        code = 409 if "used" in msg.lower() else 404
+        raise HTTPException(status_code=code, detail=msg) from e
+
+
 @app.delete("/v1/institutes/{institute_id}/activities/{activity_id}", status_code=204)
 def remove_activity(
     institute_id: str,
@@ -1913,8 +2029,11 @@ def get_section_subjects(
             id=row["id"],
             name=row["name"],
             weeklyPeriods=row.get("weeklyPeriods"),
-            teachers=[TeacherSubjectOut(userId=user_id) for user_id in row["teachers"]],
-            students=[StudentSubjectOut(userId=user_id) for user_id in row["students"]],
+            teachers=[
+                TeacherSubjectOut(userId=user_id)
+                for user_id in normalize_teacher_user_ids(row.get("teachers") or [])
+            ],
+            students=[StudentSubjectOut(userId=user_id) for user_id in row.get("students") or []],
         )
         for row in list_section_subjects(db, section_id)
     ]
@@ -2646,6 +2765,208 @@ def submit_assignment(
         db.commit()
         db.refresh(sub)
     return SubmissionOut(id=sub.id, content=sub.content, studentId=sub.student_id)
+
+
+def _assignment_http_errors(fn):
+    try:
+        return fn()
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.get("/v1/sections/{section_id}/assignment-works")
+def section_assignment_works_list(
+    section_id: str,
+    bucket: str | None = Query(None),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    return _assignment_http_errors(
+        lambda: list_teacher_works(db, section_id, user["id"], bucket)
+    )
+
+
+@app.post("/v1/sections/{section_id}/assignment-works", status_code=201)
+def section_assignment_works_create(
+    section_id: str,
+    body: AssignmentWorkCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    return _assignment_http_errors(
+        lambda: create_work(db, section_id, user["id"], body.model_dump())
+    )
+
+
+@app.get("/v1/sections/{section_id}/assignment-works/assigned")
+def section_assignment_works_assigned(
+    section_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    return _assignment_http_errors(lambda: list_assigned_student(db, section_id, user["id"]))
+
+
+@app.get("/v1/assignment-works/{assignment_id}")
+def assignment_work_get(
+    assignment_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    return _assignment_http_errors(lambda: get_work(db, assignment_id, user["id"]))
+
+
+@app.patch("/v1/assignment-works/{assignment_id}")
+def assignment_work_patch(
+    assignment_id: str,
+    body: AssignmentWorkPatch,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    return _assignment_http_errors(
+        lambda: patch_work(db, assignment_id, user["id"], body.model_dump(exclude_unset=True))
+    )
+
+
+@app.get("/v1/assignment-works/{assignment_id}/questions")
+def assignment_work_questions_get(
+    assignment_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    return _assignment_http_errors(lambda: list_questions_teacher(db, assignment_id, user["id"]))
+
+
+@app.put("/v1/assignment-works/{assignment_id}/questions")
+def assignment_work_questions_put(
+    assignment_id: str,
+    body: AssignmentQuestionsReplaceIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    return _assignment_http_errors(
+        lambda: replace_questions(
+            db, assignment_id, user["id"], [q.model_dump() for q in body.questions]
+        )
+    )
+
+
+@app.post("/v1/assignment-works/{assignment_id}/publish")
+def assignment_work_publish(
+    assignment_id: str,
+    body: AssignmentWorkPublishIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    from app.services.section_assignments import _parse_dt
+
+    publish_at = _parse_dt(body.publishAt) if body.publishAt else None
+    return _assignment_http_errors(
+        lambda: publish_work(db, assignment_id, user["id"], publish_at)
+    )
+
+
+@app.post("/v1/assignment-works/{assignment_id}/unpublish")
+def assignment_work_unpublish(
+    assignment_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    return _assignment_http_errors(lambda: unpublish_work(db, assignment_id, user["id"]))
+
+
+@app.get("/v1/assignment-works/{assignment_id}/submissions")
+def assignment_work_submissions(
+    assignment_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    return _assignment_http_errors(lambda: list_submissions(db, assignment_id, user["id"]))
+
+
+@app.post("/v1/assignment-works/{assignment_id}/attempts")
+def assignment_work_attempt_start(
+    assignment_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    return _assignment_http_errors(lambda: get_or_create_attempt(db, assignment_id, user["id"]))
+
+
+@app.get("/v1/assignment-works/{assignment_id}/attempts/me")
+def assignment_work_attempt_me(
+    assignment_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    return _assignment_http_errors(lambda: get_or_create_attempt(db, assignment_id, user["id"]))
+
+
+@app.patch("/v1/assignment-works/{assignment_id}/attempts/me/responses")
+def assignment_work_attempt_responses(
+    assignment_id: str,
+    body: AssignmentResponsesPatchIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    return _assignment_http_errors(
+        lambda: save_responses(db, assignment_id, user["id"], body.answers)
+    )
+
+
+@app.post("/v1/assignment-works/{assignment_id}/attempts/me/submit")
+def assignment_work_attempt_submit(
+    assignment_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    return _assignment_http_errors(lambda: submit_attempt(db, assignment_id, user["id"]))
+
+
+@app.patch("/v1/assignment-works/{assignment_id}/attempts/{attempt_id}/grade")
+def assignment_work_attempt_grade(
+    assignment_id: str,
+    attempt_id: str,
+    body: AssignmentGradeIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    return _assignment_http_errors(
+        lambda: grade_attempt(
+            db,
+            assignment_id,
+            attempt_id,
+            user["id"],
+            body.model_dump(),
+        )
+    )
+
+
+@app.get("/v1/guardians/me/children/{student_id}/assignment-works")
+def guardian_child_assignment_works(
+    student_id: str,
+    section_id: str = Query(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    """Guardian read path (phase 6): returns published graded works when scores_visible."""
+    raise HTTPException(
+        status_code=501,
+        detail="Guardian assignment read not enabled; use student account or enable in a future release.",
+    )
+
+
+@app.post("/v1/assignment-works/{assignment_id}/llm-variants")
+def assignment_work_llm_variants(
+    assignment_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    if not settings.assignment_llm_rewrite_enabled:
+        raise HTTPException(status_code=501, detail="LLM paraphrase is disabled")
+    raise HTTPException(status_code=501, detail="LLM paraphrase not implemented")
 
 
 @app.get("/v1/institutes/{institute_id}/attendance/summary", response_model=AttendanceSummaryOut)

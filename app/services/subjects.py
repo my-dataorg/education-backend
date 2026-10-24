@@ -63,6 +63,18 @@ def get_section(db: Session, section_id: str) -> Section:
     return section
 
 
+def normalize_teacher_user_ids(teachers: list) -> list[str]:
+    ids: list[str] = []
+    for item in teachers:
+        if isinstance(item, dict):
+            uid = item.get("userId") or item.get("user_id")
+            if uid:
+                ids.append(str(uid))
+        elif item:
+            ids.append(str(item))
+    return ids
+
+
 def list_section_subjects(db: Session, section_id: str) -> list[dict]:
     rows = db.execute(
         select(Subject, SectionSubject)
@@ -88,7 +100,7 @@ def list_section_subjects(db: Session, section_id: str) -> list[dict]:
             "id": subject.id,
             "name": subject.name,
             "weeklyPeriods": link.weekly_periods,
-            "teachers": list(teachers),
+            "teachers": [{"userId": teacher_id} for teacher_id in teachers],
             "students": list(students),
         })
     return result

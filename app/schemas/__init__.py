@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -529,6 +530,23 @@ class ActivityOut(BaseModel):
     name: str
 
 
+class RoomCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=30)
+
+    @field_validator("name")
+    @classmethod
+    def require_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Room name is required")
+        return value[:30]
+
+
+class RoomOut(BaseModel):
+    id: str
+    name: str
+
+
 class SectionSubjectAssign(BaseModel):
     subjectId: str
     weeklyPeriods: int | None = Field(default=None, ge=1, le=40)
@@ -710,8 +728,8 @@ class TimetableCellOut(BaseModel):
     day: int
     periodNo: int
     slotId: str
-    sectionId: str
-    subjectId: str
+    sectionId: str = ""
+    subjectId: str | None = None
     subjectName: str = ""
     teacherId: str | None = None
     teacherName: str = ""
@@ -719,6 +737,20 @@ class TimetableCellOut(BaseModel):
     locked: bool = False
     status: str
     clashReason: str | None = None
+    cellSource: str | None = None
+
+
+class TimetableSchoolCellPatch(BaseModel):
+    dayOfWeek: int = Field(ge=1, le=7)
+    slotId: str
+    subjectId: str | None = None
+    teacherId: str | None = None
+    room: str | None = Field(default=None, max_length=30)
+    clear: bool = False
+
+
+class TimetableApplySchoolDefaultsIn(BaseModel):
+    mode: str = Field(pattern="^(fill_empty|override_all)$")
 
 
 class TimetableOut(BaseModel):
@@ -1285,3 +1317,64 @@ class ParentMessageOut(BaseModel):
     senderUserId: str
     body: str
     sentAt: datetime
+
+
+class AssignmentWorkCreate(BaseModel):
+    title: str = "Untitled assignment"
+    description: str = ""
+    assignmentType: str = Field(default="assignment", pattern="^(assignment|test)$")
+    audienceType: str = Field(default="section", pattern="^(section|students)$")
+    instructions: str = ""
+
+
+class AssignmentWorkPatch(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    instructions: str | None = None
+    audienceType: str | None = Field(default=None, pattern="^(section|students)$")
+    audienceStudentIds: list[str] | None = None
+    dueAt: str | None = None
+    publishAt: str | None = None
+
+
+class AssignmentWorkPublishIn(BaseModel):
+    publishAt: str | None = None
+
+
+class AssignmentQuestionOptionIn(BaseModel):
+    key: str
+    label: str
+    isCorrect: bool = False
+
+
+class AssignmentQuestionVariantIn(BaseModel):
+    stem: str = ""
+    metadata: dict = Field(default_factory=dict)
+    options: list[AssignmentQuestionOptionIn] = Field(default_factory=list)
+
+
+class AssignmentQuestionIn(BaseModel):
+    type: str
+    sortOrder: int = 0
+    points: float = 1
+    required: bool = True
+    variants: list[AssignmentQuestionVariantIn] = Field(default_factory=list)
+
+
+class AssignmentQuestionsReplaceIn(BaseModel):
+    questions: list[AssignmentQuestionIn]
+
+
+class AssignmentResponsesPatchIn(BaseModel):
+    answers: dict[str, Any] = Field(default_factory=dict)
+
+
+class AssignmentGradeResponseIn(BaseModel):
+    questionId: str
+    teacherScore: float | None = None
+    feedback: str = ""
+
+
+class AssignmentGradeIn(BaseModel):
+    responses: list[AssignmentGradeResponseIn] = Field(default_factory=list)
+    scoresVisible: bool = False

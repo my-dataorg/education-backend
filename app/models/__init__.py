@@ -263,6 +263,15 @@ class Activity(Base):
     is_system: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
+class InstituteRoom(Base):
+    __tablename__ = "institute_rooms"
+    __table_args__ = (UniqueConstraint("institute_id", "name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    institute_id: Mapped[str] = mapped_column(String(36), ForeignKey("institutes.id"))
+    name: Mapped[str] = mapped_column(String(30))
+
+
 class SectionSubject(Base):
     __tablename__ = "section_subjects"
     __table_args__ = (UniqueConstraint("section_id", "subject_id"),)
@@ -349,6 +358,21 @@ class PublishedTimetableEntry(Base):
     teacher_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     room: Mapped[str | None] = mapped_column(String(30), nullable=True)
     locked: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class TimetableSchoolDefault(Base):
+    """Institute-wide default cell (day + period). Fills empty class cells when subject is linked."""
+
+    __tablename__ = "timetable_school_defaults"
+    __table_args__ = (UniqueConstraint("institute_id", "slot_id", "day_of_week"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    institute_id: Mapped[str] = mapped_column(String(36), ForeignKey("institutes.id"))
+    slot_id: Mapped[str] = mapped_column(String(36), ForeignKey("schedule_slots.id"))
+    day_of_week: Mapped[int] = mapped_column()
+    subject_id: Mapped[str] = mapped_column(String(36), ForeignKey("subjects.id"))
+    teacher_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    room: Mapped[str | None] = mapped_column(String(30), nullable=True)
 
 
 class ScheduleSpecialDay(Base):
@@ -448,6 +472,81 @@ class Assignment(Base):
     assignment_type: Mapped[str] = mapped_column(String(16), default="assignment")
     due_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     created_by: Mapped[str] = mapped_column(String(64))
+    publish_state: Mapped[str] = mapped_column(String(16), default="published")
+    publish_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    audience_type: Mapped[str] = mapped_column(String(16), default="section")
+    instructions: Mapped[str] = mapped_column(Text, default="")
+    scores_visible: Mapped[bool] = mapped_column(default=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class AssignmentAudienceStudent(Base):
+    __tablename__ = "assignment_audience_students"
+    __table_args__ = (UniqueConstraint("assignment_id", "student_id"),)
+
+    assignment_id: Mapped[str] = mapped_column(String(36), ForeignKey("assignments.id"), primary_key=True)
+    student_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+
+
+class AssignmentQuestion(Base):
+    __tablename__ = "assignment_questions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    assignment_id: Mapped[str] = mapped_column(String(36), ForeignKey("assignments.id"))
+    sort_order: Mapped[int] = mapped_column(default=0)
+    question_type: Mapped[str] = mapped_column(String(32))
+    points: Mapped[float] = mapped_column(default=1.0)
+    required: Mapped[bool] = mapped_column(default=True)
+
+
+class AssignmentQuestionVariant(Base):
+    __tablename__ = "assignment_question_variants"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    question_id: Mapped[str] = mapped_column(String(36), ForeignKey("assignment_questions.id"))
+    variant_index: Mapped[int] = mapped_column(default=0)
+    stem_text: Mapped[str] = mapped_column(Text, default="")
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+
+
+class AssignmentQuestionOption(Base):
+    __tablename__ = "assignment_question_options"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    variant_id: Mapped[str] = mapped_column(String(36), ForeignKey("assignment_question_variants.id"))
+    option_key: Mapped[str] = mapped_column(String(16))
+    label: Mapped[str] = mapped_column(Text, default="")
+    is_correct: Mapped[bool] = mapped_column(default=False)
+
+
+class AssignmentAttempt(Base):
+    __tablename__ = "assignment_attempts"
+    __table_args__ = (UniqueConstraint("assignment_id", "student_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    assignment_id: Mapped[str] = mapped_column(String(36), ForeignKey("assignments.id"))
+    student_id: Mapped[str] = mapped_column(String(64))
+    snapshot_json: Mapped[str] = mapped_column(Text, default="{}")
+    status: Mapped[str] = mapped_column(String(16), default="in_progress")
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    score: Mapped[float | None] = mapped_column(nullable=True)
+    max_score: Mapped[float | None] = mapped_column(nullable=True)
+
+
+class AssignmentResponse(Base):
+    __tablename__ = "assignment_responses"
+    __table_args__ = (UniqueConstraint("attempt_id", "question_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    attempt_id: Mapped[str] = mapped_column(String(36), ForeignKey("assignment_attempts.id"))
+    question_id: Mapped[str] = mapped_column(String(36), ForeignKey("assignment_questions.id"))
+    answer_json: Mapped[str] = mapped_column(Text, default="{}")
+    auto_score: Mapped[float | None] = mapped_column(nullable=True)
+    teacher_score: Mapped[float | None] = mapped_column(nullable=True)
+    feedback: Mapped[str] = mapped_column(Text, default="")
 
 
 class SectionAttendanceDay(Base):

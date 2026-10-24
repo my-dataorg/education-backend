@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -19,10 +19,15 @@ from app.models import (
     SectionSubject,
     Subject,
     TimetableEntry,
+    TimetableSchoolDefault,
 )
+from app.schemas import TimetableCellPatch
 from app.services.timetable import (
+    apply_school_defaults,
     detect_clashes,
     detect_period_limit_warnings,
+    get_timetable,
+    patch_cell,
     publish_timetable,
 )
 
@@ -136,6 +141,40 @@ def test_detect_clashes_for_teacher_double_booked(db: Session):
     clashes = detect_clashes(db, institute.id)
 
     assert any(clash["type"] == "teacher" for clash in clashes)
+
+
+def test_patch_cell_rejects_teacher_double_booked(db: Session):
+    institute = add_institute(db, "owner", "owner")
+    sections = [
+        Section(id="section-a", institute_id=institute.id, name="A", class_name="9"),
+        Section(id="section-b", institute_id=institute.id, name="B", class_name="9"),
+    ]
+    subject = Subject(id="english", institute_id=institute.id, name="English")
+    db.add_all([*sections, subject])
+    for section in sections:
+        db.add(SectionSubject(section_id=section.id, subject_id=subject.id))
+    db.add(InstituteMember(institute_id=institute.id, user_id="teacher-1", role="teacher"))
+    db.commit()
+
+    slot_id = seed_schedule(db, institute.id, "section-a", subject.id)
+
+    with pytest.raises(ValueError, match="already scheduled"):
+        patch_cell(
+            db,
+            institute.id,
+            TimetableCellPatch(
+                sectionId="section-b",
+                dayOfWeek=1,
+                slotId=slot_id,
+                subjectId=subject.id,
+                teacherId="teacher-1",
+            ),
+        )
+
+    entry_b = db.scalar(
+        select(TimetableEntry).where(TimetableEntry.section_id == "section-b")
+    )
+    assert entry_b is None
 
 
 def test_period_limit_is_warning_not_clash(db: Session):
@@ -376,3 +415,52 @@ def test_student_reads_published_schedule_only(db: Session, client: TestClient):
     body = response.json()
     assert body["entries"][0]["room"] is None
     assert body["entries"][0]["slotId"] == slot_id
+
+
+def test_class_timetable_inherits_school_default(db: Session):
+    institute = Institute(id="inst-1", name="Test", join_code="ABC")
+    section = Section(id="sec-1", institute_id=institute.id, name="A", class_name="7")
+    subject = Subject(id="sub-1", institute_id=institute.id, name="Math")
+    slot = ScheduleSlot(
+        id="slot-1",
+        institute_id=institute.id,
+        label="P1",
+        kind="instruction",
+        start_time=datetime.strptime("09:00", "%H:%M").time(),
+        end_time=datetime.strptime("09:45", "%H:%M").time(),
+        position=1,
+    )
+    db.add_all(
+        [
+            institute,
+            section,
+            subject,
+            slot,
+            ScheduleSettings(institute_id=institute.id, weekdays="1,2,3,4,5"),
+            SectionSubject(section_id=section.id, subject_id=subject.id),
+            TimetableSchoolDefault(
+                id="def-1",
+                institute_id=institute.id,
+                slot_id=slot.id,
+                day_of_week=1,
+                subject_id=subject.id,
+                teacher_id="t-1",
+            ),
+        ]
+    )
+    db.commit()
+
+    payload = get_timetable(db, institute.id, view="class", item_id=section.id, state="draft")
+    inherited = [c for c in payload["cells"] if c.get("cellSource") == "school_default"]
+    assert len(inherited) == 1
+    assert inherited[0]["subjectId"] == subject.id
+
+    apply_school_defaults(db, institute.id, mode="fill_empty")
+    entry = db.scalar(
+        select(TimetableEntry).where(
+            TimetableEntry.section_id == section.id,
+            TimetableEntry.day_of_week == 1,
+        )
+    )
+    assert entry is not None
+    assert entry.subject_id == subject.id

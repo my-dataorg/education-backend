@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     # Comma-separated extra JWT iss values (same keys as auth_issuer).
     auth_issuer_aliases: str = ""
     use_platform_auth: bool = True
+    assignment_llm_rewrite_enabled: bool = False
 
     def trusted_issuers(self) -> set[str]:
         issuers = {self.issuer}
