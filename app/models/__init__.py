@@ -24,6 +24,7 @@ class Institute(Base):
     city: Mapped[str] = mapped_column(String(100), default="")
     state: Mapped[str] = mapped_column(String(100), default="")
     postal_code: Mapped[str] = mapped_column(String(20), default="")
+    contact_name: Mapped[str] = mapped_column(String(200), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

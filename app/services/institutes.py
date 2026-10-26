@@ -465,6 +465,7 @@ def institute_profile_dict(institute: Institute) -> dict:
         "city": institute.city or "",
         "state": institute.state or "",
         "postalCode": institute.postal_code or "",
+        "contactName": institute.contact_name or "",
     }
 
 

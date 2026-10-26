@@ -633,6 +633,7 @@ def migrate_institute_profile(engine: Engine) -> None:
                     ("city", "VARCHAR(100) DEFAULT ''"),
                     ("state", "VARCHAR(100) DEFAULT ''"),
                     ("postal_code", "VARCHAR(20) DEFAULT ''"),
+                    ("contact_name", "VARCHAR(200) DEFAULT ''"),
                 ),
             ),
             (

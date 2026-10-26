@@ -6,6 +6,27 @@ from pydantic import BaseModel, Field, field_validator
 
 class InstituteCreate(BaseModel):
     name: str = Field(min_length=2, max_length=200)
+    contactName: str = Field(min_length=2, max_length=200)
+    phone: str = Field(max_length=32)
+    address: str = Field(min_length=2, max_length=500)
+    city: str = Field(min_length=2, max_length=100)
+    state: str = Field(default="", max_length=100)
+    postalCode: str = Field(default="", max_length=20)
+
+    @field_validator("name", "contactName", "phone", "address", "city", "state", "postalCode", mode="before")
+    @classmethod
+    def strip_text(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+    @field_validator("phone")
+    @classmethod
+    def require_phone_digits(cls, value: str) -> str:
+        digits = "".join(ch for ch in value if ch.isdigit())
+        if len(digits) < 7:
+            raise ValueError("Phone needs at least 7 digits")
+        return value
 
 
 class InstituteOut(BaseModel):
@@ -407,6 +428,7 @@ class InstituteProfileOut(BaseModel):
     city: str = ""
     state: str = ""
     postalCode: str = ""
+    contactName: str = ""
 
 
 class InstituteProfileUpdate(BaseModel):
@@ -666,6 +688,15 @@ class SyllabusCopyOut(BaseModel):
     subjectsCopied: int
     nodesCopied: int
     targetCount: int
+
+
+class SyllabusWeightItem(BaseModel):
+    nodeId: str
+    weightPercent: float = Field(gt=0, le=100)
+
+
+class SyllabusWeightsPatch(BaseModel):
+    weights: list[SyllabusWeightItem] = Field(min_length=1)
 
 
 SyllabusNodeOut.model_rebuild()

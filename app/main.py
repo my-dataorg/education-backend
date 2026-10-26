@@ -128,6 +128,7 @@ from app.schemas import (
     SyllabusCompletionPatch,
     SyllabusCopyIn,
     SyllabusCopyOut,
+    SyllabusWeightsPatch,
     SyllabusNodeCreate,
     SyllabusNodeOut,
     SyllabusNodePatch,
@@ -329,6 +330,7 @@ from app.services.subjects import (
 )
 from app.services.syllabus import (
     _UNSET,
+    apply_weight_updates,
     build_tree,
     copy_syllabus_between_sections,
     create_node,
@@ -437,7 +439,16 @@ def create_institute(
     db: Session = Depends(get_db),
     user: User = Depends(require_education_subscription),
 ):
-    inst = Institute(name=body.name, join_code=new_join_code())
+    inst = Institute(
+        name=body.name,
+        join_code=new_join_code(),
+        contact_name=body.contactName,
+        phone=body.phone,
+        address=body.address,
+        city=body.city,
+        state=body.state,
+        postal_code=body.postalCode,
+    )
     db.add(inst)
     db.flush()
     db.add(InstituteMember(institute_id=inst.id, user_id=user["id"], role="owner"))
@@ -445,8 +456,11 @@ def create_institute(
         Branch(
             institute_id=inst.id,
             name="Main campus",
-            address="",
-            city="",
+            address=body.address,
+            city=body.city,
+            state=body.state,
+            postal_code=body.postalCode,
+            phone=body.phone,
             is_primary=True,
         )
     )
@@ -2261,6 +2275,43 @@ def patch_syllabus_node(
     if not node_dict:
         raise HTTPException(status_code=404, detail="Node not found")
     return _node_to_out(node_dict)
+
+
+@app.patch(
+    "/v1/sections/{section_id}/subjects/{subject_id}/syllabus/weights",
+    response_model=SyllabusTreeOut,
+)
+def patch_syllabus_weights(
+    section_id: str,
+    subject_id: str,
+    body: SyllabusWeightsPatch,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    section = db.get(Section, section_id)
+    if not section:
+        raise HTTPException(status_code=404, detail="Section not found")
+    try:
+        require_syllabus_admin(db, section.institute_id, user["id"])
+        apply_weight_updates(
+            db,
+            section_id,
+            subject_id,
+            [(item.nodeId, item.weightPercent) for item in body.weights],
+        )
+        tree = build_tree(
+            db,
+            section_id,
+            subject_id,
+            _syllabus_can_edit_completion(db, section_id, user["id"]),
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        detail = str(e)
+        status = 400 if "sum" in detail or "weight" in detail.lower() else 404
+        raise HTTPException(status_code=status, detail=detail) from e
+    return _tree_to_out(tree)
 
 
 @app.delete(

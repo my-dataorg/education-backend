@@ -5,6 +5,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app import main
 from app.db.session import get_db
@@ -12,6 +13,7 @@ from app.models import (
     Base,
     Activity,
     AttendanceRecord,
+    Branch,
     Institute,
     InstituteInvitation,
     InstituteMember,
@@ -69,11 +71,70 @@ def test_institute_creation_requires_subscription(db: Session):
     main.app.dependency_overrides[get_db] = override_db
     main.app.dependency_overrides[main.require_education_subscription] = no_subscription
     try:
-        response = TestClient(main.app).post("/v1/institutes", json={"name": "School"})
+        response = TestClient(main.app).post(
+            "/v1/institutes",
+            json={
+                "name": "School",
+                "contactName": "Anita Rao",
+                "phone": "9876543210",
+                "address": "12 Lake Road",
+                "city": "Hyderabad",
+            },
+        )
         assert response.status_code == 403
         assert db.scalar(select(func.count()).select_from(Institute)) == 0
     finally:
         main.app.dependency_overrides.clear()
+
+
+def test_create_institute_stores_contact_on_main_campus():
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+
+    def override_db():
+        yield session
+
+    main.app.dependency_overrides[get_db] = override_db
+    main.app.dependency_overrides[main.require_education_subscription] = (
+        lambda: {"id": "owner", "email": "owner@example.com", "token": "test"}
+    )
+    try:
+        response = TestClient(main.app).post(
+            "/v1/institutes",
+            json={
+                "name": "Riverside Academy",
+                "contactName": "Anita Rao",
+                "phone": "9876543210",
+                "address": "12 Lake Road",
+                "city": "Hyderabad",
+                "state": "Telangana",
+                "postalCode": "500001",
+            },
+        )
+        assert response.status_code == 201
+        institute = session.scalar(select(Institute).where(Institute.name == "Riverside Academy"))
+        assert institute is not None
+        assert institute.contact_name == "Anita Rao"
+        assert institute.phone == "9876543210"
+        assert institute.address == "12 Lake Road"
+        assert institute.city == "Hyderabad"
+        branch = session.scalar(select(Branch).where(Branch.institute_id == institute.id))
+        assert branch is not None
+        assert branch.is_primary is True
+        assert branch.name == "Main campus"
+        assert branch.phone == institute.phone
+        assert branch.address == institute.address
+        assert branch.city == institute.city
+        assert branch.state == "Telangana"
+        assert branch.postal_code == "500001"
+    finally:
+        main.app.dependency_overrides.clear()
+        session.close()
 
 
 def test_non_owner_cannot_invite_or_assign_section_member(db: Session, client: TestClient):

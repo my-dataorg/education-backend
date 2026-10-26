@@ -15,6 +15,40 @@ WEIGHT_TOLERANCE = 0.01
 _UNSET = object()
 
 
+def _round_weight(value: float) -> float:
+    return round(value, 2)
+
+
+def _prorate_siblings_after_delete(siblings: list[SectionSyllabusNode], deleted_id: str) -> None:
+    deleted = next((s for s in siblings if s.id == deleted_id), None)
+    if not deleted:
+        return
+    freed = float(deleted.weight_percent)
+    survivors = [s for s in siblings if s.id != deleted_id]
+    if not survivors:
+        return
+    if len(survivors) == 1:
+        survivors[0].weight_percent = 100
+        return
+    total = sum(float(s.weight_percent) for s in survivors)
+    if total <= WEIGHT_TOLERANCE:
+        even = _round_weight(100 / len(survivors))
+        for i, s in enumerate(survivors):
+            if i < len(survivors) - 1:
+                s.weight_percent = even
+            else:
+                s.weight_percent = _round_weight(100 - even * (len(survivors) - 1))
+        return
+    for s in survivors:
+        share = float(s.weight_percent) / total
+        s.weight_percent = _round_weight(float(s.weight_percent) + freed * share)
+    adjusted = sum(float(s.weight_percent) for s in survivors)
+    if abs(adjusted - 100.0) > WEIGHT_TOLERANCE:
+        survivors[-1].weight_percent = _round_weight(
+            float(survivors[-1].weight_percent) + (100.0 - adjusted)
+        )
+
+
 def require_syllabus_admin(db: Session, institute_id: str, user_id: str) -> None:
     member = require_membership(db, institute_id, user_id)
     if member.role in MANAGE_ROLES or member.role == "principal":
@@ -192,9 +226,15 @@ def create_node(
     _validate_parent(db, section_id, subject_id, parent_id)
     if weight_percent <= 0 or weight_percent > 100:
         raise ValueError("weightPercent must be between 0 and 100")
+    siblings_before = list(db.scalars(_siblings_query(section_id, subject_id, parent_id)))
+    if (
+        len(siblings_before) == 1
+        and abs(float(siblings_before[0].weight_percent) - 100.0) <= WEIGHT_TOLERANCE
+    ):
+        siblings_before[0].weight_percent = 50
+        weight_percent = 50
     if sort_order is None:
-        siblings = list(db.scalars(_siblings_query(section_id, subject_id, parent_id)))
-        sort_order = len(siblings)
+        sort_order = len(siblings_before)
     node = SectionSyllabusNode(
         section_id=section_id,
         subject_id=subject_id,
@@ -265,7 +305,44 @@ def delete_node(db: Session, section_id: str, subject_id: str, node_id: str) -> 
     node = db.get(SectionSyllabusNode, node_id)
     if not node or node.section_id != section_id or node.subject_id != subject_id:
         raise ValueError("Node not found")
+    parent_id = node.parent_id
+    siblings = list(db.scalars(_siblings_query(section_id, subject_id, parent_id)))
+    _prorate_siblings_after_delete(siblings, node_id)
     db.execute(delete(SectionSyllabusNode).where(SectionSyllabusNode.id == node_id))
+    db.flush()
+    remaining = list(db.scalars(_siblings_query(section_id, subject_id, parent_id)))
+    if remaining:
+        validate_sibling_weights(remaining)
+    db.commit()
+
+
+def apply_weight_updates(
+    db: Session,
+    section_id: str,
+    subject_id: str,
+    updates: list[tuple[str, float]],
+) -> None:
+    if not updates:
+        return
+    assert_subject_linked(db, section_id, subject_id)
+    by_id = dict(updates)
+    nodes = _load_nodes(db, section_id, subject_id)
+    node_ids = {n.id for n in nodes}
+    for node_id in by_id:
+        if node_id not in node_ids:
+            raise ValueError("Node not found")
+    for node in nodes:
+        if node.id not in by_id:
+            continue
+        weight = by_id[node.id]
+        if weight <= 0 or weight > 100:
+            raise ValueError("weightPercent must be between 0 and 100")
+        node.weight_percent = weight
+    db.flush()
+    by_parent = _children_map(nodes)
+    for group in by_parent.values():
+        if group:
+            validate_sibling_weights(group)
     db.commit()
 
 
