@@ -472,9 +472,11 @@ class TimetableSubstitution(Base):
 
 class DailyNote(Base):
     __tablename__ = "daily_notes"
+    __table_args__ = (UniqueConstraint("section_id", "subject_id", "note_date"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     section_id: Mapped[str] = mapped_column(String(36), ForeignKey("sections.id"))
+    subject_id: Mapped[str] = mapped_column(String(36), ForeignKey("subjects.id"))
     teacher_id: Mapped[str] = mapped_column(String(64))
     content: Mapped[str] = mapped_column(Text)
     note_date: Mapped[date] = mapped_column(Date, server_default=func.current_date())

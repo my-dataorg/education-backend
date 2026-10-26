@@ -872,6 +872,50 @@ def migrate_daily_notes_board(engine: Engine) -> None:
         )
 
 
+def migrate_daily_notes_per_subject(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                ALTER TABLE daily_notes
+                ADD COLUMN IF NOT EXISTS subject_id VARCHAR(36) REFERENCES subjects(id);
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                UPDATE daily_notes dn
+                SET subject_id = (
+                  SELECT ss.subject_id FROM section_subjects ss
+                  WHERE ss.section_id = dn.section_id
+                  ORDER BY ss.subject_id
+                  LIMIT 1
+                )
+                WHERE dn.subject_id IS NULL;
+                """
+            )
+        )
+        conn.execute(text("DELETE FROM daily_notes WHERE subject_id IS NULL;"))
+        conn.execute(
+            text(
+                """
+                DO $$
+                BEGIN
+                  IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'daily_notes_section_subject_date_key'
+                  ) THEN
+                    ALTER TABLE daily_notes
+                    ADD CONSTRAINT daily_notes_section_subject_date_key
+                    UNIQUE (section_id, subject_id, note_date);
+                  END IF;
+                END $$;
+                """
+            )
+        )
+
+
 def seed_default_activities(db: Session) -> None:
     """Create the standard non-subject schedule activities for every institute."""
     institute_ids = db.scalars(select(Institute.id)).all()

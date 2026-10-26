@@ -1087,6 +1087,7 @@ class DailyNoteAttachment(BaseModel):
 
 
 class NoteCreate(BaseModel):
+    subjectId: str
     content: str
 
 
@@ -1098,6 +1099,7 @@ class DailyNoteUpsert(BaseModel):
 
 class NoteOut(BaseModel):
     id: str | None = None
+    subjectId: str
     content: str
     noteDate: date
     teacherId: str | None = None

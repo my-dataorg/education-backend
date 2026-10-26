@@ -35,6 +35,7 @@ from app.db.migrate import (
     migrate_student_leave_requests,
     migrate_section_syllabus,
     migrate_daily_notes_board,
+    migrate_daily_notes_per_subject,
     run_migrations,
     seed_default_activities,
     seed_default_branches,
@@ -385,6 +386,7 @@ async def lifespan(_: FastAPI):
     migrate_student_leave_requests(engine)
     migrate_section_syllabus(engine)
     migrate_daily_notes_board(engine)
+    migrate_daily_notes_per_subject(engine)
     with SessionLocal() as db:
         seed_default_branches(db)
         seed_default_activities(db)
@@ -2980,6 +2982,7 @@ def create_note(
         return daily_note_service.upsert_note_for_date(
             db,
             section_id,
+            body.subjectId,
             user["id"],
             date.today(),
             body.content,
@@ -2995,35 +2998,46 @@ def create_note(
 @app.get("/v1/sections/{section_id}/notes", response_model=list[NoteOut])
 def list_notes(
     section_id: str,
+    subject_id: str | None = Query(default=None, alias="subjectId"),
     db: Session = Depends(get_db),
     user: User = Depends(require_education_subscription),
 ):
     try:
-        return daily_note_service.list_notes(db, section_id, user["id"])
+        return daily_note_service.list_notes(db, section_id, user["id"], subject_id)
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
 
 
-@app.get("/v1/sections/{section_id}/notes/{note_date}", response_model=NoteOut)
-def read_note_for_date(
+@app.get(
+    "/v1/sections/{section_id}/subjects/{subject_id}/notes/{note_date}",
+    response_model=NoteOut,
+)
+def read_subject_note_for_date(
     section_id: str,
+    subject_id: str,
     note_date: date,
     db: Session = Depends(get_db),
     user: User = Depends(require_education_subscription),
 ):
     try:
-        return daily_note_service.get_note_for_date(db, section_id, user["id"], note_date)
+        return daily_note_service.get_note_for_date(
+            db, section_id, subject_id, user["id"], note_date
+        )
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
 
 
-@app.put("/v1/sections/{section_id}/notes/{note_date}", response_model=NoteOut)
-def upsert_note_for_date(
+@app.put(
+    "/v1/sections/{section_id}/subjects/{subject_id}/notes/{note_date}",
+    response_model=NoteOut,
+)
+def upsert_subject_note_for_date(
     section_id: str,
+    subject_id: str,
     note_date: date,
     body: DailyNoteUpsert,
     db: Session = Depends(get_db),
@@ -3033,6 +3047,7 @@ def upsert_note_for_date(
         return daily_note_service.upsert_note_for_date(
             db,
             section_id,
+            subject_id,
             user["id"],
             note_date,
             body.content,
