@@ -52,6 +52,7 @@ from app.models import (
     Institute,
     InstituteJoinRequest,
     InstituteMember,
+    ScheduleSettings,
     Section,
     SectionMember,
     SectionSubject,
@@ -1470,6 +1471,23 @@ def read_timetable(
             and teaching_staff_assigned_to_section(db, effective_id, user["id"])
         ):
             effective_state = "draft"
+        if (
+            not can_view_draft
+            and effective_view == "class"
+            and effective_id
+            and member.role == STUDENT_ROLE
+        ):
+            enrolled = db.scalar(
+                select(SectionMember.id).where(
+                    SectionMember.section_id == effective_id,
+                    SectionMember.user_id == user["id"],
+                    SectionMember.member_type == "student",
+                )
+            )
+            if enrolled:
+                settings = db.get(ScheduleSettings, institute_id)
+                if not settings or not settings.published_at:
+                    effective_state = "draft"
         if not can_view_draft:
             if not effective_id:
                 if member.role in TEACHING_STAFF_ROLES:

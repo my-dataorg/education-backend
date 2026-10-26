@@ -513,6 +513,7 @@ def get_section_overview(db: Session, section_id: str, user_id: str) -> dict:
     can_view_roster = institute_member and (
         institute_member.role in MANAGE_ROLES
         or assignment_type == "teacher"
+        or assignment_type == "student"
         or teaching_staff_assigned_to_section(db, section.id, user_id)
     )
 
