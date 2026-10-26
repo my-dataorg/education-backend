@@ -33,6 +33,7 @@ from app.db.migrate import (
     migrate_section_attendance_days,
     migrate_assignment_works,
     migrate_student_leave_requests,
+    migrate_section_syllabus,
     run_migrations,
     seed_default_activities,
     seed_default_branches,
@@ -124,6 +125,14 @@ from app.schemas import (
     SectionSubjectAssign,
     SectionSubjectOut,
     SectionSubjectWeeklyPeriodsPatch,
+    SyllabusCompletionPatch,
+    SyllabusCopyIn,
+    SyllabusCopyOut,
+    SyllabusNodeCreate,
+    SyllabusNodeOut,
+    SyllabusNodePatch,
+    SyllabusSubjectSummaryOut,
+    SyllabusTreeOut,
     InstituteRoleSettingsOut,
     InstituteRoleSettingsUpdate,
     TimetableAutoFillIn,
@@ -318,6 +327,18 @@ from app.services.subjects import (
     unassign_teacher,
     unassign_student as unassign_subject_student,
 )
+from app.services.syllabus import (
+    _UNSET,
+    build_tree,
+    copy_syllabus_between_sections,
+    create_node,
+    delete_node,
+    list_syllabus_summaries,
+    require_syllabus_admin,
+    require_syllabus_completion_editor,
+    set_leaf_completion,
+    update_node,
+)
 from app.services.user_identity import enrich_rows, identity_for_user
 from app.services import exams as exam_service
 from app.services import fees as fee_service
@@ -357,6 +378,7 @@ async def lifespan(_: FastAPI):
     migrate_section_attendance_days(engine)
     migrate_assignment_works(engine)
     migrate_student_leave_requests(engine)
+    migrate_section_syllabus(engine)
     with SessionLocal() as db:
         seed_default_branches(db)
         seed_default_activities(db)
@@ -2037,6 +2059,267 @@ def get_section_subjects(
         )
         for row in list_section_subjects(db, section_id)
     ]
+
+
+def _syllabus_can_edit_completion(db: Session, section_id: str, user_id: str) -> bool:
+    try:
+        require_syllabus_completion_editor(db, section_id, user_id)
+        return True
+    except (PermissionError, ValueError):
+        return False
+
+
+def _node_to_out(node_dict: dict) -> SyllabusNodeOut:
+    return SyllabusNodeOut(
+        id=node_dict["id"],
+        title=node_dict["title"],
+        weightPercent=node_dict["weightPercent"],
+        sortOrder=node_dict["sortOrder"],
+        completedPercent=node_dict["completedPercent"],
+        effectiveCompletedPercent=node_dict["effectiveCompletedPercent"],
+        isLeaf=node_dict["isLeaf"],
+        canEditCompletion=node_dict["canEditCompletion"],
+        children=[_node_to_out(c) for c in node_dict.get("children", [])],
+    )
+
+
+def _find_syllabus_node_dict(nodes: list[dict], node_id: str) -> dict | None:
+    for node in nodes:
+        if node["id"] == node_id:
+            return node
+        found = _find_syllabus_node_dict(node.get("children", []), node_id)
+        if found:
+            return found
+    return None
+
+
+def _tree_to_out(tree: dict) -> SyllabusTreeOut:
+    return SyllabusTreeOut(
+        subjectId=tree["subjectId"],
+        subjectName=tree["subjectName"],
+        subjectTotalCompletedPercent=tree["subjectTotalCompletedPercent"],
+        nodes=[_node_to_out(n) for n in tree["nodes"]],
+    )
+
+
+@app.post(
+    "/v1/institutes/{institute_id}/syllabus/copy",
+    response_model=SyllabusCopyOut,
+)
+def post_copy_section_syllabus(
+    institute_id: str,
+    body: SyllabusCopyIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        require_syllabus_admin(db, institute_id, user["id"])
+        data = copy_syllabus_between_sections(
+            db,
+            institute_id,
+            body.sourceSectionId,
+            body.targetSectionIds,
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return SyllabusCopyOut(**data)
+
+
+@app.get("/v1/sections/{section_id}/syllabus", response_model=list[SyllabusSubjectSummaryOut])
+def get_section_syllabus_summaries(
+    section_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    section = db.get(Section, section_id)
+    if not section:
+        raise HTTPException(status_code=404, detail="Section not found")
+    try:
+        require_section_access(db, section_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    return [SyllabusSubjectSummaryOut(**row) for row in list_syllabus_summaries(db, section_id)]
+
+
+@app.get(
+    "/v1/sections/{section_id}/subjects/{subject_id}/syllabus",
+    response_model=SyllabusTreeOut,
+)
+def get_section_subject_syllabus(
+    section_id: str,
+    subject_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    section = db.get(Section, section_id)
+    if not section:
+        raise HTTPException(status_code=404, detail="Section not found")
+    try:
+        require_section_access(db, section_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    try:
+        tree = build_tree(
+            db,
+            section_id,
+            subject_id,
+            _syllabus_can_edit_completion(db, section_id, user["id"]),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return _tree_to_out(tree)
+
+
+@app.post(
+    "/v1/sections/{section_id}/subjects/{subject_id}/syllabus/nodes",
+    response_model=SyllabusNodeOut,
+    status_code=201,
+)
+def post_syllabus_node(
+    section_id: str,
+    subject_id: str,
+    body: SyllabusNodeCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    section = db.get(Section, section_id)
+    if not section:
+        raise HTTPException(status_code=404, detail="Section not found")
+    try:
+        require_syllabus_admin(db, section.institute_id, user["id"])
+        node = create_node(
+            db,
+            section_id,
+            subject_id,
+            body.title,
+            body.weightPercent,
+            parent_id=body.parentId,
+            sort_order=body.sortOrder,
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400 if "sum" in str(e) else 404, detail=str(e)) from e
+    return SyllabusNodeOut(
+        id=node.id,
+        title=node.title,
+        weightPercent=float(node.weight_percent),
+        sortOrder=node.sort_order,
+        completedPercent=float(node.completed_percent or 0),
+        effectiveCompletedPercent=float(node.completed_percent or 0),
+        isLeaf=True,
+        canEditCompletion=False,
+        children=[],
+    )
+
+
+@app.patch(
+    "/v1/sections/{section_id}/subjects/{subject_id}/syllabus/nodes/{node_id}",
+    response_model=SyllabusNodeOut,
+)
+def patch_syllabus_node(
+    section_id: str,
+    subject_id: str,
+    node_id: str,
+    body: SyllabusNodePatch,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    section = db.get(Section, section_id)
+    if not section:
+        raise HTTPException(status_code=404, detail="Section not found")
+    parent_id: str | None | object = (
+        body.parentId if "parentId" in body.model_fields_set else _UNSET
+    )
+    try:
+        require_syllabus_admin(db, section.institute_id, user["id"])
+        update_node(
+            db,
+            section_id,
+            subject_id,
+            node_id,
+            title=body.title,
+            weight_percent=body.weightPercent,
+            parent_id=parent_id,
+            sort_order=body.sortOrder,
+        )
+        tree = build_tree(
+            db,
+            section_id,
+            subject_id,
+            _syllabus_can_edit_completion(db, section_id, user["id"]),
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        detail = str(e)
+        status = 400 if "sum" in detail or "weight" in detail.lower() else 404
+        raise HTTPException(status_code=status, detail=detail) from e
+    node_dict = _find_syllabus_node_dict(tree["nodes"], node_id)
+    if not node_dict:
+        raise HTTPException(status_code=404, detail="Node not found")
+    return _node_to_out(node_dict)
+
+
+@app.delete(
+    "/v1/sections/{section_id}/subjects/{subject_id}/syllabus/nodes/{node_id}",
+    status_code=204,
+)
+def delete_syllabus_node(
+    section_id: str,
+    subject_id: str,
+    node_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    section = db.get(Section, section_id)
+    if not section:
+        raise HTTPException(status_code=404, detail="Section not found")
+    try:
+        require_syllabus_admin(db, section.institute_id, user["id"])
+        delete_node(db, section_id, subject_id, node_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@app.patch(
+    "/v1/sections/{section_id}/subjects/{subject_id}/syllabus/nodes/{node_id}/completion",
+    response_model=SyllabusTreeOut,
+)
+def patch_syllabus_node_completion(
+    section_id: str,
+    subject_id: str,
+    node_id: str,
+    body: SyllabusCompletionPatch,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    section = db.get(Section, section_id)
+    if not section:
+        raise HTTPException(status_code=404, detail="Section not found")
+    try:
+        require_syllabus_completion_editor(db, section_id, user["id"])
+        tree = set_leaf_completion(
+            db,
+            section_id,
+            subject_id,
+            node_id,
+            body.completedPercent,
+            user["id"],
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        detail = str(e)
+        status = 422 if "leaf" in detail.lower() else 404
+        if "between" in detail:
+            status = 400
+        raise HTTPException(status_code=status, detail=detail) from e
+    return _tree_to_out(tree)
 
 
 @app.patch(

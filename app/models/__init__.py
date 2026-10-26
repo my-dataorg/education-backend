@@ -302,6 +302,23 @@ class SectionSubjectStudentAssignment(Base):
     student_id: Mapped[str] = mapped_column(String(64))
 
 
+class SectionSyllabusNode(Base):
+    __tablename__ = "section_syllabus_nodes"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    section_id: Mapped[str] = mapped_column(String(36), ForeignKey("sections.id", ondelete="CASCADE"))
+    subject_id: Mapped[str] = mapped_column(String(36), ForeignKey("subjects.id", ondelete="CASCADE"))
+    parent_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("section_syllabus_nodes.id", ondelete="CASCADE"), nullable=True
+    )
+    title: Mapped[str] = mapped_column(String(200))
+    weight_percent: Mapped[float] = mapped_column()
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    completed_percent: Mapped[float] = mapped_column(default=0.0)
+    completed_by_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class ScheduleSettings(Base):
     __tablename__ = "schedule_settings"
 

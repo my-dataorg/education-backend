@@ -613,6 +613,64 @@ class SectionSubjectWeeklyPeriodsPatch(BaseModel):
     weeklyPeriods: int | None = Field(default=None, ge=1, le=40)
 
 
+class SyllabusNodeOut(BaseModel):
+    id: str
+    title: str
+    weightPercent: float
+    sortOrder: int
+    completedPercent: float
+    effectiveCompletedPercent: float
+    isLeaf: bool
+    canEditCompletion: bool
+    children: list["SyllabusNodeOut"] = Field(default_factory=list)
+
+
+class SyllabusTreeOut(BaseModel):
+    subjectId: str
+    subjectName: str
+    subjectTotalCompletedPercent: float
+    nodes: list[SyllabusNodeOut] = Field(default_factory=list)
+
+
+class SyllabusSubjectSummaryOut(BaseModel):
+    subjectId: str
+    subjectName: str
+    totalCompletedPercent: float
+    nodeCount: int
+
+
+class SyllabusNodeCreate(BaseModel):
+    parentId: str | None = None
+    title: str
+    weightPercent: float = Field(gt=0, le=100)
+    sortOrder: int | None = None
+
+
+class SyllabusNodePatch(BaseModel):
+    title: str | None = None
+    weightPercent: float | None = Field(default=None, gt=0, le=100)
+    parentId: str | None = None
+    sortOrder: int | None = None
+
+
+class SyllabusCompletionPatch(BaseModel):
+    completedPercent: float = Field(ge=0, le=100)
+
+
+class SyllabusCopyIn(BaseModel):
+    sourceSectionId: str
+    targetSectionIds: list[str] = Field(min_length=1)
+
+
+class SyllabusCopyOut(BaseModel):
+    subjectsCopied: int
+    nodesCopied: int
+    targetCount: int
+
+
+SyllabusNodeOut.model_rebuild()
+
+
 class ScheduleSettingsOut(BaseModel):
     timezone: str
     schoolStart: str

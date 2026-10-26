@@ -812,6 +812,30 @@ def migrate_student_leave_requests(engine: Engine) -> None:
         )
 
 
+def migrate_section_syllabus(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS section_syllabus_nodes (
+                  id VARCHAR(36) PRIMARY KEY,
+                  section_id VARCHAR(36) NOT NULL REFERENCES sections(id) ON DELETE CASCADE,
+                  subject_id VARCHAR(36) NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+                  parent_id VARCHAR(36) REFERENCES section_syllabus_nodes(id) ON DELETE CASCADE,
+                  title VARCHAR(200) NOT NULL,
+                  weight_percent DOUBLE PRECISION NOT NULL,
+                  sort_order INTEGER NOT NULL DEFAULT 0,
+                  completed_percent DOUBLE PRECISION NOT NULL DEFAULT 0,
+                  completed_by_user_id VARCHAR(64),
+                  completed_at TIMESTAMPTZ
+                );
+                CREATE INDEX IF NOT EXISTS section_syllabus_nodes_section_subject_idx
+                  ON section_syllabus_nodes(section_id, subject_id);
+                """
+            )
+        )
+
+
 def migrate_timetable_school_defaults(engine: Engine) -> None:
     with engine.begin() as conn:
         conn.execute(
