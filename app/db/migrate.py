@@ -858,6 +858,20 @@ def migrate_timetable_school_defaults(engine: Engine) -> None:
         )
 
 
+def migrate_daily_notes_board(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                ALTER TABLE daily_notes
+                ADD COLUMN IF NOT EXISTS drawing_json TEXT NOT NULL DEFAULT '';
+                ALTER TABLE daily_notes
+                ADD COLUMN IF NOT EXISTS attachments_json TEXT NOT NULL DEFAULT '[]';
+                """
+            )
+        )
+
+
 def seed_default_activities(db: Session) -> None:
     """Create the standard non-subject schedule activities for every institute."""
     institute_ids = db.scalars(select(Institute.id)).all()

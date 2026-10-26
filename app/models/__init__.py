@@ -478,6 +478,8 @@ class DailyNote(Base):
     teacher_id: Mapped[str] = mapped_column(String(64))
     content: Mapped[str] = mapped_column(Text)
     note_date: Mapped[date] = mapped_column(Date, server_default=func.current_date())
+    drawing_json: Mapped[str] = mapped_column(Text, default="")
+    attachments_json: Mapped[str] = mapped_column(Text, default="[]")
 
 
 class Assignment(Base):

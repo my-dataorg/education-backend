@@ -1079,15 +1079,31 @@ class SectionClassDashboardOut(BaseModel):
     events: list[dict]
 
 
+class DailyNoteAttachment(BaseModel):
+    id: str = ""
+    name: str = "photo"
+    contentType: str = "image/jpeg"
+    dataUrl: str
+
+
 class NoteCreate(BaseModel):
     content: str
 
 
+class DailyNoteUpsert(BaseModel):
+    content: str = ""
+    drawingJson: str = ""
+    attachments: list[DailyNoteAttachment] = Field(default_factory=list)
+
+
 class NoteOut(BaseModel):
-    id: str
+    id: str | None = None
     content: str
     noteDate: date
-    teacherId: str
+    teacherId: str | None = None
+    drawingJson: str = ""
+    attachments: list[DailyNoteAttachment] = Field(default_factory=list)
+    editable: bool = False
 
 
 class InstitutePostCreate(BaseModel):

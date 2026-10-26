@@ -34,6 +34,7 @@ from app.db.migrate import (
     migrate_assignment_works,
     migrate_student_leave_requests,
     migrate_section_syllabus,
+    migrate_daily_notes_board,
     run_migrations,
     seed_default_activities,
     seed_default_branches,
@@ -119,6 +120,7 @@ from app.schemas import (
     SubjectTeacherCopyIn,
     SubjectTeacherCopyOut,
     SubjectTeacherAssignmentsSaveIn,
+    DailyNoteUpsert,
     NoteCreate,
     NoteOut,
     SectionCreate,
@@ -267,6 +269,7 @@ from app.services.sections import (
     require_section_teacher,
     assert_can_mark_attendance,
 )
+from app.services import daily_notes as daily_note_service
 from app.services.schedule import get_schedule, replace_schedule
 from app.services.timetable import (
     accept_auto_fill,
@@ -381,6 +384,7 @@ async def lifespan(_: FastAPI):
     migrate_assignment_works(engine)
     migrate_student_leave_requests(engine)
     migrate_section_syllabus(engine)
+    migrate_daily_notes_board(engine)
     with SessionLocal() as db:
         seed_default_branches(db)
         seed_default_activities(db)
@@ -2973,18 +2977,19 @@ def create_note(
     user: User = Depends(require_education_subscription),
 ):
     try:
-        require_daily_note_editor(db, section_id, user["id"])
+        return daily_note_service.upsert_note_for_date(
+            db,
+            section_id,
+            user["id"],
+            date.today(),
+            body.content,
+            "",
+            [],
+        )
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
-    note = DailyNote(section_id=section_id, teacher_id=user["id"], content=body.content)
-    db.add(note)
-    db.commit()
-    db.refresh(note)
-    return NoteOut(
-        id=note.id, content=note.content, noteDate=note.note_date, teacherId=note.teacher_id
-    )
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @app.get("/v1/sections/{section_id}/notes", response_model=list[NoteOut])
@@ -2994,18 +2999,50 @@ def list_notes(
     user: User = Depends(require_education_subscription),
 ):
     try:
-        require_section_access(db, section_id, user["id"])
+        return daily_note_service.list_notes(db, section_id, user["id"])
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
-    notes = db.scalars(
-        select(DailyNote).where(DailyNote.section_id == section_id).order_by(DailyNote.note_date.desc())
-    )
-    return [
-        NoteOut(id=n.id, content=n.content, noteDate=n.note_date, teacherId=n.teacher_id)
-        for n in notes
-    ]
+
+
+@app.get("/v1/sections/{section_id}/notes/{note_date}", response_model=NoteOut)
+def read_note_for_date(
+    section_id: str,
+    note_date: date,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        return daily_note_service.get_note_for_date(db, section_id, user["id"], note_date)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@app.put("/v1/sections/{section_id}/notes/{note_date}", response_model=NoteOut)
+def upsert_note_for_date(
+    section_id: str,
+    note_date: date,
+    body: DailyNoteUpsert,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        return daily_note_service.upsert_note_for_date(
+            db,
+            section_id,
+            user["id"],
+            note_date,
+            body.content,
+            body.drawingJson,
+            [item.model_dump() for item in body.attachments],
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @app.post("/v1/sections/{section_id}/assignments", response_model=AssignmentOut, status_code=201)
