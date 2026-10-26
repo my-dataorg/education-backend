@@ -71,6 +71,34 @@ def user_can_access_section(db: Session, section_id: str, user_id: str) -> bool:
     return enrolled is not None
 
 
+def teaching_staff_assigned_to_section(db: Session, section_id: str, user_id: str) -> bool:
+    """True when staff teaches this class (roster teacher or subject assignment)."""
+    section = db.get(Section, section_id)
+    if not section:
+        return False
+    member = get_membership(db, section.institute_id, user_id)
+    if not member or member.role not in TEACHING_STAFF_ROLES:
+        return False
+    on_roster = db.scalar(
+        select(SectionMember.id).where(
+            SectionMember.section_id == section_id,
+            SectionMember.user_id == user_id,
+            SectionMember.member_type == "teacher",
+        )
+    )
+    if on_roster:
+        return True
+    assigned = db.scalar(
+        select(TeacherSubjectAssignment.id)
+        .where(
+            TeacherSubjectAssignment.section_id == section_id,
+            TeacherSubjectAssignment.teacher_id == user_id,
+        )
+        .limit(1)
+    )
+    return assigned is not None
+
+
 def require_section_access(db: Session, section_id: str, user_id: str) -> Section:
     section = db.get(Section, section_id)
     if not section:
@@ -483,7 +511,9 @@ def get_section_overview(db: Session, section_id: str, user_id: str) -> dict:
         )
     )
     can_view_roster = institute_member and (
-        institute_member.role in MANAGE_ROLES or assignment_type == "teacher"
+        institute_member.role in MANAGE_ROLES
+        or assignment_type == "teacher"
+        or teaching_staff_assigned_to_section(db, section.id, user_id)
     )
 
     students = list(

@@ -1454,6 +1454,7 @@ def read_timetable(
     try:
         from app.roles import TEACHING_STAFF_ROLES
         from app.services.institutes import principal_can_edit_timetable
+        from app.services.sections import teaching_staff_assigned_to_section
 
         member = require_timetable_view(db, institute_id, user["id"])
         can_view_draft = member.role in TIMETABLE_EDIT_ROLES or (
@@ -1462,6 +1463,13 @@ def read_timetable(
         effective_state = state if can_view_draft else "published"
         effective_view = view if view in {"class", "teacher", "room", "school"} else "class"
         effective_id = id
+        if (
+            not can_view_draft
+            and effective_view == "class"
+            and effective_id
+            and teaching_staff_assigned_to_section(db, effective_id, user["id"])
+        ):
+            effective_state = "draft"
         if not can_view_draft:
             if not effective_id:
                 if member.role in TEACHING_STAFF_ROLES:
