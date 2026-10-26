@@ -317,6 +317,17 @@ def attendance_mark_permissions(db: Session, section: Section, user_id: str) -> 
     }
 
 
+def _is_subject_teacher_for_section(db: Session, section_id: str, user_id: str) -> bool:
+    return bool(
+        db.scalar(
+            select(TeacherSubjectAssignment.id).where(
+                TeacherSubjectAssignment.section_id == section_id,
+                TeacherSubjectAssignment.teacher_id == user_id,
+            )
+        )
+    )
+
+
 def _is_substitute_for_section_today(
     db: Session, section: Section, user_id: str, on_date: date
 ) -> bool:
@@ -347,7 +358,7 @@ def _is_substitute_for_section_today(
 def can_edit_daily_notes(
     db: Session, section: Section, user_id: str, note_date: date | None = None
 ) -> bool:
-    """Class teacher or today's substitute may edit today's note only; admins/students read-only."""
+    """Subject teachers (and substitutes) may edit today's section note; admins/students read-only."""
     target = note_date or date.today()
     if target != date.today():
         return False
@@ -358,9 +369,9 @@ def can_edit_daily_notes(
         return False
     if section.class_teacher_user_id == user_id:
         return True
-    if _is_substitute_for_section_today(db, section, user_id, target):
+    if _is_subject_teacher_for_section(db, section.id, user_id):
         return True
-    if not section.class_teacher_user_id and _is_section_teacher(db, section.id, user_id):
+    if _is_substitute_for_section_today(db, section, user_id, target):
         return True
     return False
 
@@ -369,7 +380,7 @@ def require_daily_note_editor(db: Session, section_id: str, user_id: str) -> Sec
     section = require_section_access(db, section_id, user_id)
     if not can_edit_daily_notes(db, section, user_id):
         raise PermissionError(
-            "Only the class teacher or today's substitute can add or edit daily notes"
+            "Only a teacher assigned to a subject in this class (or today's substitute) can edit daily notes"
         )
     return section
 
