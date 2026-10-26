@@ -13,10 +13,14 @@ from app.models import (
     SectionSubject,
     SectionSubjectStudentAssignment,
     Submission,
+    TeacherAbsence,
     TeacherSubjectAssignment,
     TimetableEntry,
+    TimetableSubstitution,
 )
-from app.roles import MANAGE_ROLES, TEACHER_ROLES, TEACHING_STAFF_ROLES
+from app.roles import MANAGE_ROLES, PARENT_ROLE, STUDENT_ROLE, TEACHER_ROLES, TEACHING_STAFF_ROLES
+
+VIEW_ALL_SECTIONS_ROLES = MANAGE_ROLES | frozenset({"principal"})
 from app.services.institutes import get_member_profile, get_membership, require_membership
 from app.services.user_identity import enrich_rows
 
@@ -45,8 +49,19 @@ def user_can_access_section(db: Session, section_id: str, user_id: str) -> bool:
     member = get_membership(db, section.institute_id, user_id)
     if not member:
         return False
-    if member.role in MANAGE_ROLES:
+    if member.role in VIEW_ALL_SECTIONS_ROLES:
         return True
+    if member.role == STUDENT_ROLE:
+        enrolled = db.scalar(
+            select(SectionMember).where(
+                SectionMember.section_id == section_id,
+                SectionMember.user_id == user_id,
+                SectionMember.member_type == "student",
+            )
+        )
+        return enrolled is not None
+    if member.role == PARENT_ROLE:
+        return False
     enrolled = db.scalar(
         select(SectionMember).where(
             SectionMember.section_id == section_id,
@@ -302,22 +317,60 @@ def attendance_mark_permissions(db: Session, section: Section, user_id: str) -> 
     }
 
 
-def can_edit_daily_notes(db: Session, section: Section, user_id: str) -> bool:
-    """Only the class teacher may author notes; institute admins are read-only."""
+def _is_substitute_for_section_today(
+    db: Session, section: Section, user_id: str, on_date: date
+) -> bool:
+    """Substitute assigned when the class teacher (or period teacher) is on leave."""
+    period_sub = db.scalar(
+        select(TimetableSubstitution).where(
+            TimetableSubstitution.institute_id == section.institute_id,
+            TimetableSubstitution.section_id == section.id,
+            TimetableSubstitution.substitution_date == on_date,
+            TimetableSubstitution.substitute_teacher_id == user_id,
+        )
+    )
+    if period_sub:
+        return True
+    class_teacher_id = section.class_teacher_user_id
+    if not class_teacher_id:
+        return False
+    absence = db.scalar(
+        select(TeacherAbsence).where(
+            TeacherAbsence.institute_id == section.institute_id,
+            TeacherAbsence.teacher_id == class_teacher_id,
+            TeacherAbsence.absence_date == on_date,
+        )
+    )
+    return bool(absence and absence.substitute_teacher_id == user_id)
+
+
+def can_edit_daily_notes(
+    db: Session, section: Section, user_id: str, note_date: date | None = None
+) -> bool:
+    """Class teacher or today's substitute may edit today's note only; admins/students read-only."""
+    target = note_date or date.today()
+    if target != date.today():
+        return False
     member = get_membership(db, section.institute_id, user_id)
-    if not member or member.role in MANAGE_ROLES:
+    if not member or member.role in VIEW_ALL_SECTIONS_ROLES:
         return False
-    if member.role not in TEACHER_ROLES:
+    if member.role not in {"teacher", "lecturer", "professor"}:
         return False
-    if section.class_teacher_user_id:
-        return section.class_teacher_user_id == user_id
-    return _is_section_teacher(db, section.id, user_id)
+    if section.class_teacher_user_id == user_id:
+        return True
+    if _is_substitute_for_section_today(db, section, user_id, target):
+        return True
+    if not section.class_teacher_user_id and _is_section_teacher(db, section.id, user_id):
+        return True
+    return False
 
 
 def require_daily_note_editor(db: Session, section_id: str, user_id: str) -> Section:
     section = require_section_access(db, section_id, user_id)
     if not can_edit_daily_notes(db, section, user_id):
-        raise PermissionError("Only the class teacher can add or edit daily notes")
+        raise PermissionError(
+            "Only the class teacher or today's substitute can add or edit daily notes"
+        )
     return section
 
 

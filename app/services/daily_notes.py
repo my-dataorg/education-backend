@@ -5,7 +5,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import DailyNote
-from app.services.sections import require_daily_note_editor, require_section_access
+from app.services.sections import (
+    can_edit_daily_notes,
+    require_daily_note_editor,
+    require_section_access,
+)
 
 
 def _parse_attachments(raw: str) -> list[dict]:
@@ -31,19 +35,27 @@ def note_to_dict(note: DailyNote, *, editable: bool) -> dict:
 
 
 def list_notes(db: Session, section_id: str, user_id: str) -> list[dict]:
-    require_section_access(db, section_id, user_id)
+    section = require_section_access(db, section_id, user_id)
     today = date.today()
     rows = db.scalars(
         select(DailyNote)
         .where(DailyNote.section_id == section_id)
         .order_by(DailyNote.note_date.desc())
     )
-    return [note_to_dict(row, editable=row.note_date == today) for row in rows]
+    return [
+        note_to_dict(
+            row,
+            editable=row.note_date == today
+            and can_edit_daily_notes(db, section, user_id, row.note_date),
+        )
+        for row in rows
+    ]
 
 
 def get_note_for_date(db: Session, section_id: str, user_id: str, note_date: date) -> dict:
-    require_section_access(db, section_id, user_id)
+    section = require_section_access(db, section_id, user_id)
     today = date.today()
+    editable = note_date == today and can_edit_daily_notes(db, section, user_id, note_date)
     note = db.scalar(
         select(DailyNote).where(
             DailyNote.section_id == section_id,
@@ -58,9 +70,9 @@ def get_note_for_date(db: Session, section_id: str, user_id: str, note_date: dat
             "teacherId": None,
             "drawingJson": "",
             "attachments": [],
-            "editable": note_date == today,
+            "editable": editable,
         }
-    return note_to_dict(note, editable=note_date == today)
+    return note_to_dict(note, editable=editable)
 
 
 def _validate_attachments(attachments: list) -> str:
