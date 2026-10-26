@@ -19,6 +19,8 @@ from app.models import (
     SpecialDayActivityTeacher,
     Subject,
     TimetableEntry,
+    TimetableSchoolDefault,
+    TimetableSubstitution,
 )
 from app.services.institutes import get_membership
 from app.services.timetable import entries_changed_since_publish
@@ -227,10 +229,7 @@ def replace_schedule(db: Session, institute_id: str, body) -> dict:
         )
 
     _check_conflicts(entries, slots)
-    db.execute(delete(TimetableEntry).where(TimetableEntry.institute_id == institute_id))
-    if special_days is not None:
-        _clear_special_days(db, institute_id)
-    db.execute(delete(ScheduleSlot).where(ScheduleSlot.institute_id == institute_id))
+    _clear_schedule_slots(db, institute_id, clear_special_days=special_days is not None)
     db.add_all(slots)
     db.add_all(entries)
     if special_days is not None:
@@ -330,6 +329,34 @@ def _build_special_days(
             activity.special_day_id = special_day.id
         days.append((special_day, activities))
     return days
+
+
+def _clear_schedule_slots(
+    db: Session, institute_id: str, *, clear_special_days: bool = True
+) -> None:
+    """Remove rows that reference schedule_slots before slots are deleted."""
+    db.execute(
+        delete(PublishedTimetableEntry).where(
+            PublishedTimetableEntry.institute_id == institute_id
+        )
+    )
+    db.execute(
+        delete(TimetableSubstitution).where(
+            TimetableSubstitution.institute_id == institute_id
+        )
+    )
+    db.execute(
+        delete(TimetableSchoolDefault).where(
+            TimetableSchoolDefault.institute_id == institute_id
+        )
+    )
+    db.execute(delete(TimetableEntry).where(TimetableEntry.institute_id == institute_id))
+    if clear_special_days:
+        _clear_special_days(db, institute_id)
+    db.execute(delete(ScheduleSlot).where(ScheduleSlot.institute_id == institute_id))
+    settings = db.get(ScheduleSettings, institute_id)
+    if settings:
+        settings.published_at = None
 
 
 def _clear_special_days(db: Session, institute_id: str) -> None:

@@ -635,8 +635,9 @@ def delete_institute(db: Session, institute_id: str, user_id: str) -> None:
             SectionSubject.section_id.in_([section.id for section in sections])
         )
     )
-    db.execute(delete(TimetableEntry).where(TimetableEntry.institute_id == institute_id))
-    db.execute(delete(ScheduleSlot).where(ScheduleSlot.institute_id == institute_id))
+    from app.services.schedule import _clear_schedule_slots
+
+    _clear_schedule_slots(db, institute_id)
     db.execute(delete(ScheduleSettings).where(ScheduleSettings.institute_id == institute_id))
     db.execute(delete(Section).where(Section.institute_id == institute_id))
     db.execute(delete(InstituteInvitation).where(InstituteInvitation.institute_id == institute_id))
