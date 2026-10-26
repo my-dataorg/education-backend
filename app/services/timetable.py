@@ -10,6 +10,7 @@ from app.models import (
     ScheduleSettings,
     ScheduleSlot,
     Section,
+    SectionMember,
     SectionSubject,
     Subject,
     TeacherAbsence,
@@ -18,6 +19,7 @@ from app.models import (
     TimetableSchoolDefault,
     TimetableSubstitution,
 )
+from app.services.institutes import get_membership
 from app.roles import TEACHING_STAFF_ROLES
 from app.services.platform_users import get_users_brief
 
@@ -117,21 +119,24 @@ def entries_changed_since_publish(db: Session, institute_id: str) -> bool:
     settings = db.get(ScheduleSettings, institute_id)
     if not settings or not settings.published_at:
         return False
-    published = {
-        _entry_snapshot(row)
+    resolved_draft = {_entry_row_snapshot(row) for row in _materialize_publish_rows(db, institute_id)}
+    published_snapshots = {
+        (
+            row.slot_id,
+            row.day_of_week,
+            row.section_id,
+            row.subject_id,
+            row.teacher_id or "",
+            row.room or "",
+            row.locked,
+        )
         for row in db.scalars(
             select(PublishedTimetableEntry).where(
                 PublishedTimetableEntry.institute_id == institute_id
             )
         )
     }
-    draft = {
-        _entry_snapshot(row)
-        for row in db.scalars(
-            select(TimetableEntry).where(TimetableEntry.institute_id == institute_id)
-        )
-    }
-    return published != draft
+    return published_snapshots != resolved_draft
 
 
 def teacher_busy_at_slot(
@@ -315,6 +320,116 @@ def _section_subject_ids(db: Session, section_id: str) -> set[str]:
     )
 
 
+def _entry_row_snapshot(row: dict) -> tuple:
+    return (
+        row["slot_id"],
+        row["day_of_week"],
+        row["section_id"],
+        row["subject_id"],
+        row.get("teacher_id") or "",
+        row.get("room") or "",
+        bool(row.get("locked", False)),
+    )
+
+
+def _materialize_publish_rows(db: Session, institute_id: str) -> list[dict]:
+    """Resolved timetable rows per section: class overrides plus school defaults for gaps."""
+    draft = list(
+        db.scalars(select(TimetableEntry).where(TimetableEntry.institute_id == institute_id))
+    )
+    school_defaults = _school_defaults_map(db, institute_id)
+    sections = list(
+        db.scalars(select(Section).where(Section.institute_id == institute_id))
+    )
+    rows: list[dict] = []
+    for section in sections:
+        linked = _section_subject_ids(db, section.id)
+        section_entries = [entry for entry in draft if entry.section_id == section.id]
+        class_keys = {(entry.day_of_week, entry.slot_id) for entry in section_entries}
+        for entry in section_entries:
+            rows.append(
+                {
+                    "institute_id": institute_id,
+                    "slot_id": entry.slot_id,
+                    "day_of_week": entry.day_of_week,
+                    "section_id": entry.section_id,
+                    "subject_id": entry.subject_id,
+                    "teacher_id": entry.teacher_id,
+                    "room": entry.room,
+                    "locked": entry.locked,
+                }
+            )
+        for (slot_id, day), default in school_defaults.items():
+            if (day, slot_id) in class_keys:
+                continue
+            if default.subject_id not in linked:
+                continue
+            rows.append(
+                {
+                    "institute_id": institute_id,
+                    "slot_id": slot_id,
+                    "day_of_week": day,
+                    "section_id": section.id,
+                    "subject_id": default.subject_id,
+                    "teacher_id": default.teacher_id,
+                    "room": default.room,
+                    "locked": False,
+                }
+            )
+    return rows
+
+
+def _sync_subject_teachers_from_publish(db: Session, institute_id: str, rows: list[dict]) -> None:
+    """Align subject-teacher assignments with the published timetable."""
+    picks: dict[tuple[str, str], str] = {}
+    for row in rows:
+        teacher_id = row.get("teacher_id")
+        if not teacher_id:
+            continue
+        picks[(row["section_id"], row["subject_id"])] = teacher_id
+
+    for (section_id, subject_id), teacher_id in picks.items():
+        section = db.get(Section, section_id)
+        if not section or section.institute_id != institute_id:
+            continue
+        linked = db.scalar(
+            select(SectionSubject).where(
+                SectionSubject.section_id == section_id,
+                SectionSubject.subject_id == subject_id,
+            )
+        )
+        if not linked or not get_membership(db, institute_id, teacher_id):
+            continue
+        roster = db.scalar(
+            select(SectionMember).where(
+                SectionMember.section_id == section_id,
+                SectionMember.user_id == teacher_id,
+                SectionMember.member_type == "teacher",
+            )
+        )
+        if not roster:
+            db.add(
+                SectionMember(
+                    section_id=section_id,
+                    user_id=teacher_id,
+                    member_type="teacher",
+                )
+            )
+        db.execute(
+            delete(TeacherSubjectAssignment).where(
+                TeacherSubjectAssignment.section_id == section_id,
+                TeacherSubjectAssignment.subject_id == subject_id,
+            )
+        )
+        db.add(
+            TeacherSubjectAssignment(
+                section_id=section_id,
+                subject_id=subject_id,
+                teacher_id=teacher_id,
+            )
+        )
+
+
 def get_timetable(
     db: Session,
     institute_id: str,
@@ -409,7 +524,7 @@ def get_timetable(
             }
         )
 
-    if view == "class" and item_id and state == "draft":
+    if view == "class" and item_id:
         linked = _section_subject_ids(db, item_id)
         for (slot_id, day), default in school_defaults.items():
             if (day, slot_id) in class_keys:
@@ -1094,30 +1209,29 @@ def publish_timetable(db: Session, institute_id: str) -> dict:
         db.add(settings)
         db.flush()
 
-    draft_entries = list(
-        db.scalars(select(TimetableEntry).where(TimetableEntry.institute_id == institute_id))
-    )
+    materialized = _materialize_publish_rows(db, institute_id)
     db.execute(
         delete(PublishedTimetableEntry).where(PublishedTimetableEntry.institute_id == institute_id)
     )
-    for entry in draft_entries:
+    for row in materialized:
         db.add(
             PublishedTimetableEntry(
-                id=entry.id,
-                institute_id=entry.institute_id,
-                slot_id=entry.slot_id,
-                day_of_week=entry.day_of_week,
-                section_id=entry.section_id,
-                subject_id=entry.subject_id,
-                teacher_id=entry.teacher_id,
-                room=entry.room,
-                locked=entry.locked,
+                id=str(uuid.uuid4()),
+                institute_id=row["institute_id"],
+                slot_id=row["slot_id"],
+                day_of_week=row["day_of_week"],
+                section_id=row["section_id"],
+                subject_id=row["subject_id"],
+                teacher_id=row["teacher_id"],
+                room=row["room"],
+                locked=row["locked"],
             )
         )
+    _sync_subject_teachers_from_publish(db, institute_id, materialized)
     settings.published_at = datetime.now(timezone.utc)
     db.commit()
     return {
         "publishedAt": settings.published_at,
-        "cellCount": len(draft_entries),
+        "cellCount": len(materialized),
         "changedSincePublish": False,
     }

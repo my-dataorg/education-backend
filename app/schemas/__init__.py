@@ -1106,6 +1106,14 @@ class NoteOut(BaseModel):
     drawingJson: str = ""
     attachments: list[DailyNoteAttachment] = Field(default_factory=list)
     editable: bool = False
+    publishedAt: str | None = None
+    instituteToday: str | None = None
+
+
+class DailyNotePublish(BaseModel):
+    content: str = ""
+    drawingJson: str = ""
+    attachments: list[DailyNoteAttachment] = Field(default_factory=list)
 
 
 class InstitutePostCreate(BaseModel):

@@ -36,6 +36,7 @@ from app.db.migrate import (
     migrate_section_syllabus,
     migrate_daily_notes_board,
     migrate_daily_notes_per_subject,
+    migrate_daily_notes_publish,
     run_migrations,
     seed_default_activities,
     seed_default_branches,
@@ -121,6 +122,7 @@ from app.schemas import (
     SubjectTeacherCopyIn,
     SubjectTeacherCopyOut,
     SubjectTeacherAssignmentsSaveIn,
+    DailyNotePublish,
     DailyNoteUpsert,
     NoteCreate,
     NoteOut,
@@ -270,7 +272,7 @@ from app.services.sections import (
     require_section_teacher,
     assert_can_mark_attendance,
 )
-from app.services import daily_notes as daily_note_service
+from app.services import class_board as class_board_service
 from app.services.schedule import get_schedule, replace_schedule
 from app.services.timetable import (
     accept_auto_fill,
@@ -387,6 +389,7 @@ async def lifespan(_: FastAPI):
     migrate_section_syllabus(engine)
     migrate_daily_notes_board(engine)
     migrate_daily_notes_per_subject(engine)
+    migrate_daily_notes_publish(engine)
     with SessionLocal() as db:
         seed_default_branches(db)
         seed_default_activities(db)
@@ -2979,7 +2982,7 @@ def create_note(
     user: User = Depends(require_education_subscription),
 ):
     try:
-        return daily_note_service.upsert_note_for_date(
+        return class_board_service.upsert_note_for_date(
             db,
             section_id,
             body.subjectId,
@@ -3003,7 +3006,7 @@ def list_notes(
     user: User = Depends(require_education_subscription),
 ):
     try:
-        return daily_note_service.list_notes(db, section_id, user["id"], subject_id)
+        return class_board_service.list_notes(db, section_id, user["id"], subject_id)
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ValueError as e:
@@ -3022,7 +3025,7 @@ def read_subject_note_for_date(
     user: User = Depends(require_education_subscription),
 ):
     try:
-        return daily_note_service.get_note_for_date(
+        return class_board_service.get_note_for_date(
             db, section_id, subject_id, user["id"], note_date
         )
     except PermissionError as e:
@@ -3044,7 +3047,36 @@ def upsert_subject_note_for_date(
     user: User = Depends(require_education_subscription),
 ):
     try:
-        return daily_note_service.upsert_note_for_date(
+        return class_board_service.upsert_note_for_date(
+            db,
+            section_id,
+            subject_id,
+            user["id"],
+            note_date,
+            body.content,
+            body.drawingJson,
+            [item.model_dump() for item in body.attachments],
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.post(
+    "/v1/sections/{section_id}/subjects/{subject_id}/notes/{note_date}/publish",
+    response_model=NoteOut,
+)
+def publish_subject_note_for_date(
+    section_id: str,
+    subject_id: str,
+    note_date: date,
+    body: DailyNotePublish,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        return class_board_service.publish_note_for_date(
             db,
             section_id,
             subject_id,

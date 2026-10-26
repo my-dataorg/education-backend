@@ -12,12 +12,14 @@ from app.models import (
     Base,
     Institute,
     InstituteMember,
+    PublishedTimetableEntry,
     ScheduleSettings,
     ScheduleSlot,
     Section,
     SectionMember,
     SectionSubject,
     Subject,
+    TeacherSubjectAssignment,
     TimetableEntry,
     TimetableSchoolDefault,
 )
@@ -464,3 +466,105 @@ def test_class_timetable_inherits_school_default(db: Session):
     )
     assert entry is not None
     assert entry.subject_id == subject.id
+
+
+def test_published_class_timetable_inherits_school_default(db: Session):
+    institute = Institute(id="inst-pub", name="Test", join_code="PUB1")
+    section = Section(id="sec-pub", institute_id=institute.id, name="A", class_name="7")
+    subject = Subject(id="sub-pub", institute_id=institute.id, name="Math")
+    slot = ScheduleSlot(
+        id="slot-pub",
+        institute_id=institute.id,
+        label="P1",
+        kind="instruction",
+        start_time=datetime.strptime("09:00", "%H:%M").time(),
+        end_time=datetime.strptime("09:45", "%H:%M").time(),
+        position=1,
+    )
+    db.add_all(
+        [
+            institute,
+            section,
+            subject,
+            slot,
+            ScheduleSettings(institute_id=institute.id, weekdays="1,2,3,4,5"),
+            SectionSubject(section_id=section.id, subject_id=subject.id),
+            TimetableSchoolDefault(
+                id="def-pub",
+                institute_id=institute.id,
+                slot_id=slot.id,
+                day_of_week=1,
+                subject_id=subject.id,
+                teacher_id="t-pub",
+            ),
+        ]
+    )
+    db.commit()
+
+    payload = get_timetable(db, institute.id, view="class", item_id=section.id, state="published")
+    inherited = [c for c in payload["cells"] if c.get("cellSource") == "school_default"]
+    assert len(inherited) == 1
+    assert inherited[0]["subjectId"] == subject.id
+
+
+def test_publish_materializes_school_defaults_and_syncs_subject_teacher(db: Session):
+    institute = Institute(id="inst-sync", name="Test", join_code="SYN1")
+    section = Section(id="sec-sync", institute_id=institute.id, name="A", class_name="7")
+    subject = Subject(id="sub-sync", institute_id=institute.id, name="Computer")
+    slot = ScheduleSlot(
+        id="slot-sync",
+        institute_id=institute.id,
+        label="P1",
+        kind="instruction",
+        start_time=datetime.strptime("09:00", "%H:%M").time(),
+        end_time=datetime.strptime("09:45", "%H:%M").time(),
+        position=1,
+    )
+    db.add_all(
+        [
+            institute,
+            section,
+            subject,
+            slot,
+            ScheduleSettings(institute_id=institute.id, weekdays="1"),
+            SectionSubject(section_id=section.id, subject_id=subject.id),
+            InstituteMember(institute_id=institute.id, user_id="teacher-sync", role="teacher"),
+            TimetableSchoolDefault(
+                id="def-sync",
+                institute_id=institute.id,
+                slot_id=slot.id,
+                day_of_week=1,
+                subject_id=subject.id,
+                teacher_id="teacher-sync",
+            ),
+        ]
+    )
+    db.commit()
+
+    result = publish_timetable(db, institute.id)
+    assert result["cellCount"] == 1
+    published = list(
+        db.scalars(
+            select(PublishedTimetableEntry).where(
+                PublishedTimetableEntry.institute_id == institute.id
+            )
+        )
+    )
+    assert len(published) == 1
+    assert published[0].teacher_id == "teacher-sync"
+
+    assignment = db.scalar(
+        select(TeacherSubjectAssignment).where(
+            TeacherSubjectAssignment.section_id == section.id,
+            TeacherSubjectAssignment.subject_id == subject.id,
+        )
+    )
+    assert assignment is not None
+    assert assignment.teacher_id == "teacher-sync"
+    roster = db.scalar(
+        select(SectionMember).where(
+            SectionMember.section_id == section.id,
+            SectionMember.user_id == "teacher-sync",
+        )
+    )
+    assert roster is not None

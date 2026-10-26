@@ -482,6 +482,7 @@ class DailyNote(Base):
     note_date: Mapped[date] = mapped_column(Date, server_default=func.current_date())
     drawing_json: Mapped[str] = mapped_column(Text, default="")
     attachments_json: Mapped[str] = mapped_column(Text, default="[]")
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Assignment(Base):

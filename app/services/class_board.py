@@ -1,5 +1,5 @@
 import json
-from datetime import date
+from datetime import date, datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -23,7 +23,53 @@ def _parse_attachments(raw: str) -> list[dict]:
         return []
 
 
-def note_to_dict(note: DailyNote, *, editable: bool) -> dict:
+def _can_view_note_body(
+    db: Session, section, subject_id: str, user_id: str, note: DailyNote | None, note_date: date
+) -> bool:
+    if not note:
+        return False
+    if note.published_at is not None:
+        return True
+    return can_edit_daily_note(db, section, subject_id, user_id, note_date)
+
+
+def _empty_shell(
+    subject_id: str,
+    note_date: date,
+    *,
+    editable: bool,
+    institute_today: date,
+    published_at: datetime | None = None,
+) -> dict:
+    return {
+        "id": None,
+        "subjectId": subject_id,
+        "content": "",
+        "noteDate": note_date,
+        "teacherId": None,
+        "drawingJson": "",
+        "attachments": [],
+        "editable": editable,
+        "publishedAt": published_at.isoformat() if published_at else None,
+        "instituteToday": institute_today.isoformat(),
+    }
+
+
+def note_to_dict(
+    note: DailyNote,
+    *,
+    editable: bool,
+    institute_today: date,
+    viewer_can_see_body: bool,
+) -> dict:
+    if not viewer_can_see_body:
+        return _empty_shell(
+            note.subject_id,
+            note.note_date,
+            editable=editable,
+            institute_today=institute_today,
+            published_at=None,
+        )
     return {
         "id": note.id,
         "subjectId": note.subject_id,
@@ -33,6 +79,8 @@ def note_to_dict(note: DailyNote, *, editable: bool) -> dict:
         "drawingJson": note.drawing_json or "",
         "attachments": _parse_attachments(note.attachments_json or "[]"),
         "editable": editable,
+        "publishedAt": note.published_at.isoformat() if note.published_at else None,
+        "instituteToday": institute_today.isoformat(),
     }
 
 
@@ -46,14 +94,22 @@ def list_notes(
         assert_subject_in_section(db, section_id, subject_id)
         query = query.where(DailyNote.subject_id == subject_id)
     rows = db.scalars(query.order_by(DailyNote.note_date.desc(), DailyNote.subject_id))
-    return [
-        note_to_dict(
-            row,
-            editable=row.note_date == today
-            and can_edit_daily_note(db, section, row.subject_id, user_id, row.note_date),
+    out: list[dict] = []
+    for row in rows:
+        editable = row.note_date == today and can_edit_daily_note(
+            db, section, row.subject_id, user_id, row.note_date
         )
-        for row in rows
-    ]
+        if not _can_view_note_body(db, section, row.subject_id, user_id, row, row.note_date):
+            continue
+        out.append(
+            note_to_dict(
+                row,
+                editable=editable,
+                institute_today=today,
+                viewer_can_see_body=True,
+            )
+        )
+    return out
 
 
 def get_note_for_date(
@@ -73,22 +129,16 @@ def get_note_for_date(
         )
     )
     if not note:
-        return {
-            "id": None,
-            "subjectId": subject_id,
-            "content": "",
-            "noteDate": note_date,
-            "teacherId": None,
-            "drawingJson": "",
-            "attachments": [],
-            "editable": editable,
-        }
-    return note_to_dict(note, editable=editable)
+        return _empty_shell(subject_id, note_date, editable=editable, institute_today=today)
+    can_see = _can_view_note_body(db, section, subject_id, user_id, note, note_date)
+    return note_to_dict(
+        note, editable=editable, institute_today=today, viewer_can_see_body=can_see
+    )
 
 
 def _validate_attachments(attachments: list) -> str:
     if len(attachments) > 8:
-        raise ValueError("At most 8 photos per daily note")
+        raise ValueError("At most 8 photos per class board")
     cleaned = []
     for item in attachments:
         name = str(item.get("name", "photo"))[:120]
@@ -117,7 +167,7 @@ def upsert_note_for_date(
     require_daily_note_editor(db, section_id, subject_id, user_id)
     today = date.today()
     if note_date != today:
-        raise PermissionError("Only today's daily note can be edited")
+        raise PermissionError("Only today's class board can be edited")
 
     if len(drawing_json) > 800_000:
         raise ValueError("Drawing is too large to save")
@@ -139,6 +189,7 @@ def upsert_note_for_date(
             note_date=note_date,
             drawing_json=drawing_json,
             attachments_json=attachments_json,
+            published_at=None,
         )
         db.add(note)
     else:
@@ -148,4 +199,44 @@ def upsert_note_for_date(
         note.teacher_id = user_id
     db.commit()
     db.refresh(note)
-    return note_to_dict(note, editable=True)
+    return note_to_dict(
+        note, editable=True, institute_today=today, viewer_can_see_body=True
+    )
+
+
+def publish_note_for_date(
+    db: Session,
+    section_id: str,
+    subject_id: str,
+    user_id: str,
+    note_date: date,
+    content: str,
+    drawing_json: str,
+    attachments: list,
+) -> dict:
+    """Save latest draft and mark visible to students, parents, and other staff."""
+    upsert_note_for_date(
+        db,
+        section_id,
+        subject_id,
+        user_id,
+        note_date,
+        content,
+        drawing_json,
+        attachments,
+    )
+    note = db.scalar(
+        select(DailyNote).where(
+            DailyNote.section_id == section_id,
+            DailyNote.subject_id == subject_id,
+            DailyNote.note_date == note_date,
+        )
+    )
+    if not note:
+        raise ValueError("Class board not found")
+    note.published_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(note)
+    return note_to_dict(
+        note, editable=True, institute_today=date.today(), viewer_can_see_body=True
+    )

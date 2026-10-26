@@ -916,6 +916,28 @@ def migrate_daily_notes_per_subject(engine: Engine) -> None:
         )
 
 
+def migrate_daily_notes_publish(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                DO $$
+                BEGIN
+                  IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = current_schema()
+                      AND table_name = 'daily_notes'
+                      AND column_name = 'published_at'
+                  ) THEN
+                    ALTER TABLE daily_notes ADD COLUMN published_at TIMESTAMPTZ;
+                    UPDATE daily_notes SET published_at = NOW();
+                  END IF;
+                END $$;
+                """
+            )
+        )
+
+
 def seed_default_activities(db: Session) -> None:
     """Create the standard non-subject schedule activities for every institute."""
     institute_ids = db.scalars(select(Institute.id)).all()

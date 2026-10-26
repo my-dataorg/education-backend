@@ -342,11 +342,15 @@ def _is_teacher_for_subject(
     )
 
 
-def _is_substitute_for_section_today(
-    db: Session, section: Section, user_id: str, on_date: date
+def _is_substitute_for_subject_today(
+    db: Session,
+    section: Section,
+    subject_id: str,
+    user_id: str,
+    on_date: date,
 ) -> bool:
-    """Substitute assigned when the class teacher (or period teacher) is on leave."""
-    period_sub = db.scalar(
+    """Substitute may edit when covering this subject’s assigned teacher today."""
+    period_subs = db.scalars(
         select(TimetableSubstitution).where(
             TimetableSubstitution.institute_id == section.institute_id,
             TimetableSubstitution.section_id == section.id,
@@ -354,19 +358,29 @@ def _is_substitute_for_section_today(
             TimetableSubstitution.substitute_teacher_id == user_id,
         )
     )
-    if period_sub:
-        return True
-    class_teacher_id = section.class_teacher_user_id
-    if not class_teacher_id:
-        return False
-    absence = db.scalar(
-        select(TeacherAbsence).where(
-            TeacherAbsence.institute_id == section.institute_id,
-            TeacherAbsence.teacher_id == class_teacher_id,
-            TeacherAbsence.absence_date == on_date,
+    for period_sub in period_subs:
+        if _is_teacher_for_subject(
+            db, section.id, subject_id, period_sub.original_teacher_id
+        ):
+            return True
+
+    assigned_teacher_ids = db.scalars(
+        select(TeacherSubjectAssignment.teacher_id).where(
+            TeacherSubjectAssignment.section_id == section.id,
+            TeacherSubjectAssignment.subject_id == subject_id,
         )
     )
-    return bool(absence and absence.substitute_teacher_id == user_id)
+    for teacher_id in assigned_teacher_ids:
+        absence = db.scalar(
+            select(TeacherAbsence).where(
+                TeacherAbsence.institute_id == section.institute_id,
+                TeacherAbsence.teacher_id == teacher_id,
+                TeacherAbsence.absence_date == on_date,
+            )
+        )
+        if absence and absence.substitute_teacher_id == user_id:
+            return True
+    return False
 
 
 def can_edit_daily_note(
@@ -391,7 +405,7 @@ def can_edit_daily_note(
         return False
     if _is_teacher_for_subject(db, section.id, subject_id, user_id):
         return True
-    if _is_substitute_for_section_today(db, section, user_id, target):
+    if _is_substitute_for_subject_today(db, section, subject_id, user_id, target):
         return True
     return False
 
@@ -416,7 +430,7 @@ def require_daily_note_editor(
     section = require_section_access(db, section_id, user_id)
     if not can_edit_daily_note(db, section, subject_id, user_id):
         raise PermissionError(
-            "Only the teacher assigned to this subject (or today's substitute) can edit this daily note"
+            "Only the teacher assigned to this subject (or today's substitute when they are on leave) can edit this class board"
         )
     return section
 
