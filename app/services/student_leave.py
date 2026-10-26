@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import StudentLeaveRequest
-from app.services.sections import require_section_teacher
+from app.services.sections import require_section_student, require_section_teacher
 from app.services.user_identity import enrich_rows
 
 
@@ -50,7 +50,10 @@ def list_student_leave_in_range(
     start: date,
     end: date,
 ) -> list[dict]:
-    require_section_teacher(db, section_id, user_id)
+    if student_id == user_id:
+        require_section_student(db, section_id, user_id)
+    else:
+        require_section_teacher(db, section_id, user_id)
     rows = list(
         db.scalars(
             select(StudentLeaveRequest).where(

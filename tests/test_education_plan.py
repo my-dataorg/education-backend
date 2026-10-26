@@ -18,6 +18,7 @@ from app.models import (
     InstituteInvitation,
     InstituteMember,
     Section,
+    SectionAttendanceDay,
     SectionMember,
     SectionSubject,
     TeacherSubjectAssignment,
@@ -316,6 +317,88 @@ def test_student_attendance_is_scoped_to_current_student(db: Session, client: Te
             "markedBy": "teacher",
         }
     ]
+
+
+def test_student_attendance_history_self_teacher_and_draft(db: Session, client: TestClient):
+    institute = add_institute(db)
+    section = Section(id="section-1", institute_id=institute.id, name="A", class_name="7")
+    db.add_all(
+        [
+            section,
+            InstituteMember(institute_id=institute.id, user_id="student-1", role="student"),
+            InstituteMember(institute_id=institute.id, user_id="student-2", role="student"),
+            InstituteMember(institute_id=institute.id, user_id="teacher-1", role="teacher"),
+            SectionMember(section_id=section.id, user_id="student-1", member_type="student"),
+            SectionMember(section_id=section.id, user_id="student-2", member_type="student"),
+            SectionMember(section_id=section.id, user_id="teacher-1", member_type="teacher"),
+            SectionAttendanceDay(
+                section_id=section.id,
+                attendance_date=date(2026, 10, 13),
+                publish_state="submitted",
+                marked_by="teacher-1",
+            ),
+            SectionAttendanceDay(
+                section_id=section.id,
+                attendance_date=date(2026, 10, 14),
+                publish_state="draft",
+                marked_by="teacher-1",
+            ),
+            AttendanceRecord(
+                section_id=section.id,
+                student_id="student-1",
+                attendance_date=date(2026, 10, 13),
+                status="present",
+                marked_by="teacher-1",
+            ),
+            AttendanceRecord(
+                section_id=section.id,
+                student_id="student-1",
+                attendance_date=date(2026, 10, 14),
+                status="absent",
+                marked_by="teacher-1",
+            ),
+            AttendanceRecord(
+                section_id=section.id,
+                student_id="student-2",
+                attendance_date=date(2026, 10, 13),
+                status="absent",
+                marked_by="teacher-1",
+            ),
+        ]
+    )
+    db.commit()
+
+    history_url = (
+        f"/v1/sections/{section.id}/students/student-1/attendance"
+        "?start_date=2026-10-01&end_date=2026-10-31"
+    )
+
+    main.app.dependency_overrides[main.require_education_subscription] = (
+        lambda: {"id": "student-1", "email": "s1@example.com", "token": "test"}
+    )
+    own = client.get(history_url)
+    assert own.status_code == 200
+    body = own.json()
+    assert body["summary"]["present"] == 1
+    assert body["summary"]["absent"] == 0
+    assert len(body["records"]) == 1
+    assert body["records"][0]["date"] == "2026-10-13"
+
+    other = client.get(
+        f"/v1/sections/{section.id}/students/student-2/attendance"
+        "?start_date=2026-10-01&end_date=2026-10-31"
+    )
+    assert other.status_code == 403
+
+    main.app.dependency_overrides[main.require_education_subscription] = (
+        lambda: {"id": "teacher-1", "email": "t@example.com", "token": "test"}
+    )
+    teacher_view = client.get(
+        f"/v1/sections/{section.id}/students/student-2/attendance"
+        "?start_date=2026-10-01&end_date=2026-10-31"
+    )
+    assert teacher_view.status_code == 200
+    assert teacher_view.json()["summary"]["absent"] == 1
 
 
 def test_schedule_supports_combined_special_activity_day(db: Session):

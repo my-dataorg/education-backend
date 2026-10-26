@@ -699,8 +699,20 @@ def get_student_attendance(
     start_date,
     end_date,
 ) -> dict:
-    require_section_teacher(db, section_id, user_id)
+    self_view = student_id == user_id
+    if self_view:
+        section = require_section_student(db, section_id, user_id)
+    else:
+        require_section_teacher(db, section_id, user_id)
+        section = db.get(Section, section_id)
+        if not section:
+            raise ValueError("Section not found")
     _require_student(db, section_id, student_id)
+
+    from app.services.attendance_day import can_view_attendance_for_date, day_states_for_range  # noqa: PLC0415
+
+    day_states = day_states_for_range(db, section_id, start_date, end_date) if self_view else {}
+
     records = list(
         db.scalars(
             select(AttendanceRecord)
@@ -716,6 +728,10 @@ def get_student_attendance(
     counts = {status: 0 for status in ("present", "absent", "late", "excused")}
     output = []
     for record in records:
+        if self_view:
+            day_row = day_states.get(record.attendance_date)
+            if not can_view_attendance_for_date(db, section, day_row, user_id):
+                continue
         counts[record.status] = counts.get(record.status, 0) + 1
         output.append({"date": record.attendance_date.isoformat(), "status": record.status})
     from app.services.student_leave import list_student_leave_in_range  # noqa: PLC0415
