@@ -791,6 +791,77 @@ def migrate_assignment_works(engine: Engine) -> None:
         )
 
 
+def migrate_leave_requests(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                ALTER TABLE institute_members
+                ADD COLUMN IF NOT EXISTS supervisor_user_id VARCHAR(64);
+                CREATE TABLE IF NOT EXISTS leave_requests (
+                  id VARCHAR(36) PRIMARY KEY,
+                  institute_id VARCHAR(36) NOT NULL REFERENCES institutes(id),
+                  requester_user_id VARCHAR(64) NOT NULL,
+                  requester_role VARCHAR(32) NOT NULL,
+                  section_id VARCHAR(36) REFERENCES sections(id),
+                  start_date DATE NOT NULL,
+                  end_date DATE NOT NULL,
+                  purpose VARCHAR(200) NOT NULL DEFAULT '',
+                  body TEXT NOT NULL DEFAULT '',
+                  attachments_json TEXT NOT NULL DEFAULT '[]',
+                  status VARCHAR(16) NOT NULL DEFAULT 'pending',
+                  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+                CREATE TABLE IF NOT EXISTS leave_request_approvals (
+                  id VARCHAR(36) PRIMARY KEY,
+                  leave_request_id VARCHAR(36) NOT NULL REFERENCES leave_requests(id) ON DELETE CASCADE,
+                  approval_date DATE NOT NULL,
+                  section_id VARCHAR(36) REFERENCES sections(id),
+                  subject_id VARCHAR(36),
+                  slot_id VARCHAR(36),
+                  assignee_user_id VARCHAR(64) NOT NULL,
+                  assignee_kind VARCHAR(32) NOT NULL,
+                  status VARCHAR(16) NOT NULL DEFAULT 'pending',
+                  decided_by_user_id VARCHAR(64),
+                  decided_at TIMESTAMPTZ,
+                  decision_note TEXT NOT NULL DEFAULT '',
+                  CONSTRAINT uq_leave_approval_cell UNIQUE (
+                    leave_request_id, approval_date, section_id, subject_id, slot_id
+                  )
+                );
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO leave_requests (
+                  id, institute_id, requester_user_id, requester_role, section_id,
+                  start_date, end_date, purpose, body, attachments_json, status, created_at, updated_at
+                )
+                SELECT
+                  slr.id,
+                  s.institute_id,
+                  slr.student_id,
+                  'student',
+                  slr.section_id,
+                  slr.start_date,
+                  slr.end_date,
+                  LEFT(slr.reason, 200),
+                  slr.reason,
+                  '[]',
+                  slr.status,
+                  slr.created_at,
+                  slr.created_at
+                FROM student_leave_requests slr
+                JOIN sections s ON s.id = slr.section_id
+                WHERE NOT EXISTS (SELECT 1 FROM leave_requests lr WHERE lr.id = slr.id);
+                """
+            )
+        )
+
+
 def migrate_student_leave_requests(engine: Engine) -> None:
     with engine.begin() as conn:
         conn.execute(

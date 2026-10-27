@@ -1377,6 +1377,61 @@ class StudentLeaveRequestOut(BaseModel):
     createdAt: str | None = None
 
 
+class LeaveRequestCreate(BaseModel):
+    sectionId: str | None = None
+    startDate: date
+    endDate: date
+    purpose: str = Field(default="", max_length=200)
+    body: str = ""
+    attachments: list[DailyNoteAttachment] = Field(default_factory=list)
+
+
+class LeaveApprovalOut(BaseModel):
+    id: str
+    leaveRequestId: str
+    approvalDate: str
+    sectionId: str | None = None
+    subjectId: str | None = None
+    subjectName: str | None = None
+    slotId: str | None = None
+    assigneeUserId: str
+    assigneeName: str | None = None
+    assigneeKind: str
+    status: str
+    decidedByUserId: str | None = None
+    decidedAt: str | None = None
+    decisionNote: str = ""
+
+
+class LeaveRequestOut(BaseModel):
+    id: str
+    instituteId: str
+    requesterUserId: str
+    requesterName: str | None = None
+    requesterRole: str
+    sectionId: str | None = None
+    startDate: str
+    endDate: str
+    purpose: str
+    body: str
+    attachments: list[dict] = Field(default_factory=list)
+    status: str
+    createdAt: str | None = None
+    approvals: list[LeaveApprovalOut] = Field(default_factory=list)
+
+
+class LeaveApprovalDecide(BaseModel):
+    approve: bool
+    note: str = ""
+
+
+class StaffAttendanceSummaryOut(BaseModel):
+    startDate: str
+    endDate: str
+    statusByDate: dict[str, str]
+    requests: list[LeaveRequestOut] = Field(default_factory=list)
+
+
 class AttendanceOut(BaseModel):
     studentId: str
     attendanceDate: date

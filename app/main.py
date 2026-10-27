@@ -8,6 +8,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_user, require_education_subscription
+from app.routers.lab import router as lab_router
 from app.roles import MANAGE_ROLES, STUDENT_ROLE, TIMETABLE_EDIT_ROLES
 from app.config import settings
 from app.db.migrate import (
@@ -34,6 +35,7 @@ from app.db.migrate import (
     migrate_attendance_subject_registers,
     migrate_assignment_works,
     migrate_student_leave_requests,
+    migrate_leave_requests,
     migrate_section_syllabus,
     migrate_daily_notes_board,
     migrate_daily_notes_per_subject,
@@ -161,6 +163,11 @@ from app.schemas import (
     SectionClassDashboardOut,
     AttendanceSheetOut,
     StudentLeaveRequestOut,
+    LeaveRequestCreate,
+    LeaveRequestOut,
+    LeaveApprovalOut,
+    LeaveApprovalDecide,
+    StaffAttendanceSummaryOut,
     AttendancePresentSyncIn,
     ScheduleOut,
     ScheduleUpdate,
@@ -238,6 +245,14 @@ from app.services.campus_scope import get_campus_scope
 from app.services.overview import get_owner_overview
 from app.services.attendance_sheet import get_section_attendance_sheet, save_present_only_attendance
 from app.services.student_leave import list_section_leave_requests
+from app.services.leave_requests import (
+    create_leave_request,
+    decide_approval_line,
+    list_inbox,
+    list_institute_leave_requests,
+    list_my_leave_requests,
+    staff_attendance_summary,
+)
 from app.services.section_class_dashboard import get_section_class_dashboard
 from app.services.section_assignments import (
     create_work,
@@ -389,6 +404,7 @@ async def lifespan(_: FastAPI):
     migrate_attendance_subject_registers(engine)
     migrate_assignment_works(engine)
     migrate_student_leave_requests(engine)
+    migrate_leave_requests(engine)
     migrate_section_syllabus(engine)
     migrate_daily_notes_board(engine)
     migrate_daily_notes_per_subject(engine)
@@ -400,6 +416,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
+app.include_router(lab_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins.split(","),
@@ -2871,6 +2888,114 @@ def section_attendance_sheet(
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@app.post(
+    "/v1/institutes/{institute_id}/leave-requests",
+    response_model=LeaveRequestOut,
+)
+def create_institute_leave_request(
+    institute_id: str,
+    body: LeaveRequestCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        return create_leave_request(db, institute_id, user["id"], body)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.get(
+    "/v1/institutes/{institute_id}/leave-requests/mine",
+    response_model=list[LeaveRequestOut],
+)
+def my_leave_requests(
+    institute_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        return list_my_leave_requests(db, institute_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+
+
+@app.get(
+    "/v1/institutes/{institute_id}/leave-requests/inbox",
+)
+def leave_approval_inbox(
+    institute_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        return list_inbox(db, institute_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+
+
+@app.get(
+    "/v1/institutes/{institute_id}/leave-requests",
+    response_model=list[LeaveRequestOut],
+)
+def institute_leave_requests(
+    institute_id: str,
+    status: str | None = Query(None, pattern="^(pending|approved|rejected|cancelled)$"),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        return list_institute_leave_requests(db, institute_id, user["id"], status=status)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+
+
+@app.post(
+    "/v1/institutes/{institute_id}/leave-requests/{request_id}/approvals/{line_id}/decide",
+    response_model=LeaveRequestOut,
+)
+def decide_leave_approval(
+    institute_id: str,
+    request_id: str,
+    line_id: str,
+    body: LeaveApprovalDecide,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        return decide_approval_line(
+            db,
+            institute_id,
+            request_id,
+            line_id,
+            user["id"],
+            approve=body.approve,
+            note=body.note,
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@app.get(
+    "/v1/institutes/{institute_id}/me/attendance-summary",
+    response_model=StaffAttendanceSummaryOut,
+)
+def my_staff_attendance_summary(
+    institute_id: str,
+    year: int = Query(..., ge=2000, le=2100),
+    month: int = Query(..., ge=1, le=12),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        return staff_attendance_summary(db, institute_id, user["id"], year, month)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
 
 
 @app.get(

@@ -79,6 +79,7 @@ class InstituteMember(Base):
     institute_id: Mapped[str] = mapped_column(String(36), ForeignKey("institutes.id"))
     user_id: Mapped[str] = mapped_column(String(64))
     role: Mapped[str] = mapped_column(String(32))
+    supervisor_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class InstitutePost(Base):
@@ -611,6 +612,53 @@ class StudentLeaveRequest(Base):
     reason: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(16), default="pending")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class LeaveRequest(Base):
+    __tablename__ = "leave_requests"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    institute_id: Mapped[str] = mapped_column(String(36), ForeignKey("institutes.id"))
+    requester_user_id: Mapped[str] = mapped_column(String(64))
+    requester_role: Mapped[str] = mapped_column(String(32))
+    section_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("sections.id"), nullable=True)
+    start_date: Mapped[date] = mapped_column(Date)
+    end_date: Mapped[date] = mapped_column(Date)
+    purpose: Mapped[str] = mapped_column(String(200), default="")
+    body: Mapped[str] = mapped_column(Text, default="")
+    attachments_json: Mapped[str] = mapped_column(Text, default="[]")
+    status: Mapped[str] = mapped_column(String(16), default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class LeaveRequestApproval(Base):
+    __tablename__ = "leave_request_approvals"
+    __table_args__ = (
+        UniqueConstraint(
+            "leave_request_id",
+            "approval_date",
+            "section_id",
+            "subject_id",
+            "slot_id",
+            name="uq_leave_approval_cell",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    leave_request_id: Mapped[str] = mapped_column(String(36), ForeignKey("leave_requests.id", ondelete="CASCADE"))
+    approval_date: Mapped[date] = mapped_column(Date)
+    section_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("sections.id"), nullable=True)
+    subject_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    slot_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    assignee_user_id: Mapped[str] = mapped_column(String(64))
+    assignee_kind: Mapped[str] = mapped_column(String(32))
+    status: Mapped[str] = mapped_column(String(16), default="pending")
+    decided_by_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    decision_note: Mapped[str] = mapped_column(Text, default="")
 
 
 class Submission(Base):
