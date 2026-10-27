@@ -10,10 +10,14 @@ from app.services.attendance_day import (
     upsert_attendance_day,
 )
 from app.services.academic_years import get_active_academic_year_bounds
+from app.services.attendance_registers import markable_registers
+from app.services.institute_time import institute_local_date
 from app.services.sections import (
+    CLASS_ATTENDANCE_SUBJECT,
     attendance_mark_permissions,
     assert_can_mark_attendance,
-    require_section_teacher,
+    can_mark_attendance_register,
+    require_section_attendance_staff,
 )
 from app.services.user_identity import enrich_rows
 
@@ -67,12 +71,14 @@ def get_section_attendance_sheet(
     days: int = 7,
     end_date: date | None = None,
     summary_period: str = "academic_year",
+    subject_id: str = CLASS_ATTENDANCE_SUBJECT,
 ) -> dict:
-    section = require_section_teacher(db, section_id, user_id)
+    section = require_section_attendance_staff(db, section_id, user_id)
     days = max(1, min(days, MAX_SHEET_DAYS))
     period = summary_period if summary_period in SUMMARY_PERIODS else "academic_year"
 
-    end = end_date or date.today()
+    institute_today = institute_local_date(db, section.institute_id)
+    end = end_date or institute_today
     grid_start = end - timedelta(days=days - 1)
     date_list = [grid_start + timedelta(days=i) for i in range(days)]
 
@@ -92,11 +98,14 @@ def get_section_attendance_sheet(
     )
     student_rows = enrich_rows([{"userId": s.user_id} for s in students])
 
-    day_states = day_states_for_range(db, section_id, query_start, query_end)
+    day_states = day_states_for_range(
+        db, section_id, query_start, query_end, subject_id=subject_id
+    )
     records = list(
         db.scalars(
             select(AttendanceRecord).where(
                 AttendanceRecord.section_id == section_id,
+                AttendanceRecord.subject_id == subject_id,
                 AttendanceRecord.attendance_date >= query_start,
                 AttendanceRecord.attendance_date <= query_end,
             )
@@ -125,9 +134,20 @@ def get_section_attendance_sheet(
         for s in students
     }
 
+    registers = markable_registers(db, section, user_id)
+    can_mark_today = can_mark_attendance_register(
+        db, section, user_id, subject_id, institute_today
+    )
+    perms = attendance_mark_permissions(db, section, user_id)
+    if subject_id != CLASS_ATTENDANCE_SUBJECT:
+        perms = {**perms, "canTakeAttendanceToday": can_mark_today}
+
     return {
         "startDate": grid_start.isoformat(),
         "endDate": end.isoformat(),
+        "instituteToday": institute_today.isoformat(),
+        "subjectId": subject_id,
+        "registers": registers,
         "dates": [d.isoformat() for d in date_list],
         "students": student_rows,
         "statusByStudent": status_by_student,
@@ -136,7 +156,7 @@ def get_section_attendance_sheet(
         "totalsStartDate": summary_start.isoformat(),
         "totalsEndDate": summary_end.isoformat(),
         "publishStateByDate": publish_state_by_date,
-        **attendance_mark_permissions(db, section, user_id),
+        **perms,
     }
 
 
@@ -148,9 +168,11 @@ def save_present_only_attendance(
     present_student_ids: list[str],
     excused_student_ids: list[str] | None = None,
     publish_state: str = "submitted",
+    *,
+    subject_id: str = CLASS_ATTENDANCE_SUBJECT,
 ) -> None:
-    section = require_section_teacher(db, section_id, user_id)
-    assert_can_mark_attendance(db, section, user_id, attendance_date)
+    section = require_section_attendance_staff(db, section_id, user_id)
+    assert_can_mark_attendance(db, section, user_id, attendance_date, subject_id=subject_id)
     enrolled = set(
         db.scalars(
             select(SectionMember.user_id).where(
@@ -174,6 +196,7 @@ def save_present_only_attendance(
                 AttendanceRecord.section_id == section_id,
                 AttendanceRecord.student_id == sid,
                 AttendanceRecord.attendance_date == attendance_date,
+                AttendanceRecord.subject_id == subject_id,
             )
         )
         if existing:
@@ -185,9 +208,12 @@ def save_present_only_attendance(
                     section_id=section_id,
                     student_id=sid,
                     attendance_date=attendance_date,
+                    subject_id=subject_id,
                     status=status,
                     marked_by=user_id,
                 )
             )
-    upsert_attendance_day(db, section_id, attendance_date, user_id, publish_state)
+    upsert_attendance_day(
+        db, section_id, attendance_date, user_id, publish_state, subject_id=subject_id
+    )
     db.commit()

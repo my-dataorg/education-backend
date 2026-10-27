@@ -579,6 +579,7 @@ class SectionAttendanceDay(Base):
 
     section_id: Mapped[str] = mapped_column(String(36), ForeignKey("sections.id"), primary_key=True)
     attendance_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    subject_id: Mapped[str] = mapped_column(String(36), primary_key=True, default="")
     publish_state: Mapped[str] = mapped_column(String(16), default="submitted")
     marked_by: Mapped[str] = mapped_column(String(64))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -586,12 +587,15 @@ class SectionAttendanceDay(Base):
 
 class AttendanceRecord(Base):
     __tablename__ = "attendance_records"
-    __table_args__ = (UniqueConstraint("section_id", "student_id", "attendance_date"),)
+    __table_args__ = (
+        UniqueConstraint("section_id", "student_id", "attendance_date", "subject_id"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     section_id: Mapped[str] = mapped_column(String(36), ForeignKey("sections.id"))
     student_id: Mapped[str] = mapped_column(String(64))
     attendance_date: Mapped[date] = mapped_column(Date)
+    subject_id: Mapped[str] = mapped_column(String(36), default="")
     status: Mapped[str] = mapped_column(String(16))
     marked_by: Mapped[str] = mapped_column(String(64))
 

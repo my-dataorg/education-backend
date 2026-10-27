@@ -938,6 +938,69 @@ def migrate_daily_notes_publish(engine: Engine) -> None:
         )
 
 
+def migrate_attendance_subject_registers(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                ALTER TABLE attendance_records
+                ADD COLUMN IF NOT EXISTS subject_id VARCHAR(36) NOT NULL DEFAULT '';
+                ALTER TABLE section_attendance_days
+                ADD COLUMN IF NOT EXISTS subject_id VARCHAR(36) NOT NULL DEFAULT '';
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                DO $$
+                BEGIN
+                  IF EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'attendance_records_section_id_student_id_attendance_date_key'
+                  ) THEN
+                    ALTER TABLE attendance_records
+                    DROP CONSTRAINT attendance_records_section_id_student_id_attendance_date_key;
+                  END IF;
+                END $$;
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_attendance_section_student_date_subject
+                ON attendance_records (section_id, student_id, attendance_date, subject_id);
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                DO $$
+                BEGIN
+                  IF EXISTS (
+                    SELECT 1 FROM information_schema.tables
+                    WHERE table_name = 'section_attendance_days'
+                  ) AND EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'section_attendance_days_pkey'
+                  ) AND NOT EXISTS (
+                    SELECT 1 FROM information_schema.key_column_usage
+                    WHERE table_name = 'section_attendance_days'
+                      AND column_name = 'subject_id'
+                      AND constraint_name = 'section_attendance_days_pkey'
+                  ) THEN
+                    ALTER TABLE section_attendance_days DROP CONSTRAINT section_attendance_days_pkey;
+                    ALTER TABLE section_attendance_days
+                    ADD PRIMARY KEY (section_id, attendance_date, subject_id);
+                  END IF;
+                END $$;
+                """
+            )
+        )
+
+
 def seed_default_activities(db: Session) -> None:
     """Create the standard non-subject schedule activities for every institute."""
     institute_ids = db.scalars(select(Institute.id)).all()

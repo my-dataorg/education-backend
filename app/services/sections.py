@@ -22,7 +22,10 @@ from app.roles import MANAGE_ROLES, PARENT_ROLE, STUDENT_ROLE, TEACHER_ROLES, TE
 
 VIEW_ALL_SECTIONS_ROLES = MANAGE_ROLES | frozenset({"principal"})
 from app.services.institutes import get_member_profile, get_membership, require_membership
+from app.services.institute_time import institute_local_date
 from app.services.user_identity import enrich_rows
+
+CLASS_ATTENDANCE_SUBJECT = ""
 
 
 def _section_row(db: Session, section: Section, member_type: str | None = None) -> dict:
@@ -322,20 +325,61 @@ def can_edit_past_attendance(db: Session, section: Section, user_id: str) -> boo
     return bool(member and member.role in MANAGE_ROLES)
 
 
+def require_section_attendance_staff(db: Session, section_id: str, user_id: str) -> Section:
+    section = require_section_access(db, section_id, user_id)
+    member = get_membership(db, section.institute_id, user_id)
+    if member and member.role in MANAGE_ROLES:
+        return section
+    if teaching_staff_assigned_to_section(db, section_id, user_id):
+        return section
+    raise PermissionError("Teacher role required")
+
+
+def can_mark_attendance_register(
+    db: Session,
+    section: Section,
+    user_id: str,
+    subject_id: str,
+    attendance_date: date,
+) -> bool:
+    member = get_membership(db, section.institute_id, user_id)
+    if member and member.role in MANAGE_ROLES:
+        return True
+    institute_today = institute_local_date(db, section.institute_id)
+    if attendance_date > institute_today:
+        return False
+    if attendance_date < institute_today:
+        return can_edit_past_attendance(db, section, user_id)
+    if subject_id == CLASS_ATTENDANCE_SUBJECT:
+        return can_take_attendance_today(db, section, user_id)
+    if _is_teacher_for_subject(db, section.id, subject_id, user_id):
+        return True
+    return _is_substitute_for_subject_today(db, section, subject_id, user_id, attendance_date)
+
+
 def assert_can_mark_attendance(
-    db: Session, section: Section, user_id: str, attendance_date: date
+    db: Session,
+    section: Section,
+    user_id: str,
+    attendance_date: date,
+    *,
+    subject_id: str = CLASS_ATTENDANCE_SUBJECT,
 ) -> None:
-    today = date.today()
-    if attendance_date > today:
+    institute_today = institute_local_date(db, section.institute_id)
+    if attendance_date > institute_today:
         raise PermissionError("Cannot mark attendance for a future date")
-    if attendance_date < today:
+    if attendance_date < institute_today:
         if not can_edit_past_attendance(db, section, user_id):
             raise PermissionError(
                 "Only the school owner or admin can update attendance for previous days"
             )
         return
-    if not can_take_attendance_today(db, section, user_id):
-        raise PermissionError("Only the class teacher can take attendance for today")
+    if not can_mark_attendance_register(db, section, user_id, subject_id, attendance_date):
+        if subject_id == CLASS_ATTENDANCE_SUBJECT:
+            raise PermissionError("Only the class teacher can take attendance for today")
+        raise PermissionError(
+            "Only the teacher assigned to this subject can take attendance for today"
+        )
 
 
 def attendance_mark_permissions(db: Session, section: Section, user_id: str) -> dict:
@@ -699,6 +743,8 @@ def get_student_attendance(
     user_id: str,
     start_date,
     end_date,
+    *,
+    subject_id: str = CLASS_ATTENDANCE_SUBJECT,
 ) -> dict:
     self_view = student_id == user_id
     if self_view:
@@ -712,7 +758,11 @@ def get_student_attendance(
 
     from app.services.attendance_day import can_view_attendance_for_date, day_states_for_range  # noqa: PLC0415
 
-    day_states = day_states_for_range(db, section_id, start_date, end_date) if self_view else {}
+    day_states = (
+        day_states_for_range(db, section_id, start_date, end_date, subject_id=subject_id)
+        if self_view
+        else {}
+    )
 
     records = list(
         db.scalars(
@@ -720,6 +770,7 @@ def get_student_attendance(
             .where(
                 AttendanceRecord.section_id == section_id,
                 AttendanceRecord.student_id == student_id,
+                AttendanceRecord.subject_id == subject_id,
                 AttendanceRecord.attendance_date >= start_date,
                 AttendanceRecord.attendance_date <= end_date,
             )
@@ -740,8 +791,12 @@ def get_student_attendance(
     leave_requests = list_student_leave_in_range(
         db, section_id, student_id, user_id, start_date, end_date
     )
+    from app.services.attendance_registers import student_view_registers  # noqa: PLC0415
+
     return {
         "studentId": student_id,
+        "subjectId": subject_id,
+        "registers": student_view_registers(db, section_id),
         "summary": counts,
         "records": output,
         "leaveRequests": leave_requests,

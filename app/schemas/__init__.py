@@ -1332,6 +1332,12 @@ class AttendancePresentSyncIn(BaseModel):
     presentStudentIds: list[str] = Field(default_factory=list)
     excusedStudentIds: list[str] = Field(default_factory=list)
     publishState: str = Field(default="submitted", pattern="^(draft|submitted)$")
+    subjectId: str = ""
+
+
+class AttendanceRegisterOut(BaseModel):
+    subjectId: str
+    label: str
 
 
 class AttendanceTotalsOut(BaseModel):
@@ -1345,6 +1351,9 @@ class AttendanceTotalsOut(BaseModel):
 class AttendanceSheetOut(BaseModel):
     startDate: str
     endDate: str
+    instituteToday: str | None = None
+    subjectId: str = ""
+    registers: list[AttendanceRegisterOut] = Field(default_factory=list)
     dates: list[str]
     students: list[dict]
     statusByStudent: dict[str, dict[str, str]]

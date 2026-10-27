@@ -9,12 +9,18 @@ from app.services.institutes import get_membership
 
 
 def day_states_for_range(
-    db: Session, section_id: str, start: date, end: date
+    db: Session,
+    section_id: str,
+    start: date,
+    end: date,
+    *,
+    subject_id: str = "",
 ) -> dict[date, SectionAttendanceDay]:
     rows = list(
         db.scalars(
             select(SectionAttendanceDay).where(
                 SectionAttendanceDay.section_id == section_id,
+                SectionAttendanceDay.subject_id == subject_id,
                 SectionAttendanceDay.attendance_date >= start,
                 SectionAttendanceDay.attendance_date <= end,
             )
@@ -40,12 +46,15 @@ def upsert_attendance_day(
     attendance_date: date,
     user_id: str,
     publish_state: str,
+    *,
+    subject_id: str = "",
 ) -> None:
     state = "submitted" if publish_state == "submitted" else "draft"
     row = db.scalar(
         select(SectionAttendanceDay).where(
             SectionAttendanceDay.section_id == section_id,
             SectionAttendanceDay.attendance_date == attendance_date,
+            SectionAttendanceDay.subject_id == subject_id,
         )
     )
     if row:
@@ -56,6 +65,7 @@ def upsert_attendance_day(
             SectionAttendanceDay(
                 section_id=section_id,
                 attendance_date=attendance_date,
+                subject_id=subject_id,
                 publish_state=state,
                 marked_by=user_id,
             )

@@ -31,6 +31,7 @@ from app.db.migrate import (
     migrate_parent_guardian_messaging,
     migrate_section_class_teacher,
     migrate_section_attendance_days,
+    migrate_attendance_subject_registers,
     migrate_assignment_works,
     migrate_student_leave_requests,
     migrate_section_syllabus,
@@ -385,6 +386,7 @@ async def lifespan(_: FastAPI):
     migrate_institute_profile(engine)
     migrate_section_class_teacher(engine)
     migrate_section_attendance_days(engine)
+    migrate_attendance_subject_registers(engine)
     migrate_assignment_works(engine)
     migrate_student_leave_requests(engine)
     migrate_section_syllabus(engine)
@@ -2807,6 +2809,7 @@ def student_attendance_history(
     student_id: str,
     start_date: date | None = None,
     end_date: date | None = None,
+    subject_id: str = Query("", alias="subjectId"),
     db: Session = Depends(get_db),
     user: User = Depends(require_education_subscription),
 ):
@@ -2815,7 +2818,9 @@ def student_attendance_history(
     if start > end:
         raise HTTPException(status_code=400, detail="Start date must be before end date")
     try:
-        return get_student_attendance(db, section_id, student_id, user["id"], start, end)
+        return get_student_attendance(
+            db, section_id, student_id, user["id"], start, end, subject_id=subject_id
+        )
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ValueError as e:
@@ -2848,6 +2853,7 @@ def section_attendance_sheet(
     days: int = Query(7, ge=1, le=366),
     end_date: date | None = Query(None, alias="endDate"),
     summary_period: str = Query("academic_year", alias="summaryPeriod"),
+    subject_id: str = Query("", alias="subjectId"),
     db: Session = Depends(get_db),
     user: User = Depends(require_education_subscription),
 ):
@@ -2859,6 +2865,7 @@ def section_attendance_sheet(
             days=days,
             end_date=end_date,
             summary_period=summary_period,
+            subject_id=subject_id,
         )
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
@@ -2900,12 +2907,13 @@ def sync_present_attendance(
             body.presentStudentIds,
             body.excusedStudentIds,
             body.publishState,
+            subject_id=body.subjectId,
         )
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
-    return list_attendance(section_id, body.attendanceDate, db, user)
+    return []
 
 
 @app.get("/v1/sections/{section_id}/attendance", response_model=list[AttendanceOut])
