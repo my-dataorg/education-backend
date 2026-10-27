@@ -1,7 +1,7 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Section, SectionAttendanceDay, SectionSubject, Subject, TeacherSubjectAssignment
+from app.models import Section, SectionSubject, Subject, TeacherSubjectAssignment
 from app.roles import MANAGE_ROLES
 from app.services.institutes import get_membership
 from app.services.sections import (
@@ -54,17 +54,40 @@ def markable_registers(db: Session, section: Section, user_id: str) -> list[dict
 
 
 def student_view_registers(db: Session, section_id: str) -> list[dict]:
-    subject_ids = db.scalars(
-        select(SectionAttendanceDay.subject_id)
-        .where(
-            SectionAttendanceDay.section_id == section_id,
-            SectionAttendanceDay.publish_state == "submitted",
+    """All registers a student can view: homeroom plus every subject in this class."""
+    from app.services.user_identity import enrich_rows  # noqa: PLC0415
+
+    out: list[dict] = []
+    seen: set[str] = set()
+
+    def add(subject_id: str, label: str) -> None:
+        if subject_id in seen:
+            return
+        seen.add(subject_id)
+        out.append({"subjectId": subject_id, "label": label})
+
+    add(CLASS_ATTENDANCE_SUBJECT, CLASS_REGISTER_LABEL)
+
+    for subject_id in db.scalars(
+        select(SectionSubject.subject_id).where(SectionSubject.section_id == section_id)
+    ):
+        subject = db.get(Subject, subject_id)
+        name = subject.name if subject else "Subject"
+        teacher_ids = list(
+            db.scalars(
+                select(TeacherSubjectAssignment.teacher_id).where(
+                    TeacherSubjectAssignment.section_id == section_id,
+                    TeacherSubjectAssignment.subject_id == subject_id,
+                )
+            )
         )
-        .distinct()
-    )
-    out = []
-    for subject_id in subject_ids:
-        out.append({"subjectId": subject_id, "label": _subject_label(db, subject_id)})
-    if not out:
-        out.append({"subjectId": CLASS_ATTENDANCE_SUBJECT, "label": CLASS_REGISTER_LABEL})
-    return sorted(out, key=lambda row: (row["subjectId"] != "", row["label"]))
+        if teacher_ids:
+            teachers = enrich_rows([{"userId": tid} for tid in teacher_ids])
+            teacher_names = ", ".join(
+                (t.get("name") or t.get("email") or "Teacher") for t in teachers
+            )
+            add(subject_id, f"{name} — {teacher_names}")
+        else:
+            add(subject_id, name)
+
+    return out
