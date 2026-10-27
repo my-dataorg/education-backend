@@ -1517,13 +1517,27 @@ def read_timetable(
                 )
                 if not teacher_ok:
                     raise HTTPException(status_code=404, detail="Teacher not found")
-        return get_timetable(
+        payload = get_timetable(
             db,
             institute_id,
             view=effective_view,
             item_id=effective_id,
             state=effective_state,
         )
+        if (
+            not can_view_draft
+            and effective_view == "class"
+            and effective_id
+            and not any((cell.get("subjectId") for cell in payload.get("cells") or []))
+        ):
+            payload = get_timetable(
+                db,
+                institute_id,
+                view=effective_view,
+                item_id=effective_id,
+                state="draft",
+            )
+        return payload
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
 

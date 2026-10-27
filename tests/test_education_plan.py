@@ -26,6 +26,7 @@ from app.models import (
 from app.schemas import ScheduleUpdate
 from app.services import invitations, subjects
 from app.services.schedule import replace_schedule
+from app.services.sections import get_section_overview
 
 
 @pytest.fixture
@@ -399,6 +400,33 @@ def test_student_attendance_history_self_teacher_and_draft(db: Session, client: 
     )
     assert teacher_view.status_code == 200
     assert teacher_view.json()["summary"]["absent"] == 1
+
+
+def test_section_overview_lists_roster_for_enrolled_student(db: Session):
+    institute = add_institute(db)
+    section = Section(id="section-1", institute_id=institute.id, name="A", class_name="7")
+    db.add_all(
+        [
+            section,
+            InstituteMember(institute_id=institute.id, user_id="student-1", role="student"),
+            InstituteMember(institute_id=institute.id, user_id="teacher-1", role="teacher"),
+            SectionMember(section_id=section.id, user_id="student-1", member_type="student"),
+            SectionMember(section_id=section.id, user_id="student-2", member_type="student"),
+            TeacherSubjectAssignment(
+                section_id=section.id,
+                subject_id="sub-1",
+                teacher_id="teacher-1",
+            ),
+        ]
+    )
+    db.commit()
+
+    data = get_section_overview(db, section.id, "student-1")
+
+    assert len(data["students"]) == 2
+    assert data["teacherCount"] == 1
+    assert len(data["teachers"]) == 1
+    assert data["teachers"][0]["userId"] == "teacher-1"
 
 
 def test_schedule_supports_combined_special_activity_day(db: Session):

@@ -501,21 +501,30 @@ def require_section_student(db: Session, section_id: str, user_id: str) -> Secti
     return section
 
 
+def section_teacher_user_ids(db: Session, section: Section) -> list[str]:
+    """Roster teachers plus anyone assigned to teach a subject in this class."""
+    ids: set[str] = set()
+    if section.class_teacher_user_id:
+        ids.add(section.class_teacher_user_id)
+    for user_id in db.scalars(
+        select(SectionMember.user_id).where(
+            SectionMember.section_id == section.id,
+            SectionMember.member_type == "teacher",
+        )
+    ):
+        ids.add(user_id)
+    for user_id in db.scalars(
+        select(TeacherSubjectAssignment.teacher_id).where(
+            TeacherSubjectAssignment.section_id == section.id
+        )
+    ):
+        if user_id:
+            ids.add(user_id)
+    return sorted(ids)
+
+
 def get_section_overview(db: Session, section_id: str, user_id: str) -> dict:
     section = require_section_access(db, section_id, user_id)
-    institute_member = get_membership(db, section.institute_id, user_id)
-    assignment_type = db.scalar(
-        select(SectionMember.member_type).where(
-            SectionMember.section_id == section_id,
-            SectionMember.user_id == user_id,
-        )
-    )
-    can_view_roster = institute_member and (
-        institute_member.role in MANAGE_ROLES
-        or assignment_type == "teacher"
-        or assignment_type == "student"
-        or teaching_staff_assigned_to_section(db, section.id, user_id)
-    )
 
     students = list(
         db.scalars(
@@ -525,14 +534,7 @@ def get_section_overview(db: Session, section_id: str, user_id: str) -> dict:
             )
         )
     )
-    teachers = list(
-        db.scalars(
-            select(SectionMember).where(
-                SectionMember.section_id == section_id,
-                SectionMember.member_type == "teacher",
-            )
-        )
-    )
+    teacher_ids = section_teacher_user_ids(db, section)
 
     assignments = list(
         db.scalars(
@@ -578,15 +580,14 @@ def get_section_overview(db: Session, section_id: str, user_id: str) -> dict:
         "className": section.class_name,
         "classTeacherUserId": section.class_teacher_user_id,
         "canEditDailyNotes": can_edit_daily_notes(db, section, user_id),
-        "teacherCount": len(teachers),
+        "teacherCount": len(teacher_ids),
         "studentCount": enrolled_students,
         "notesCount": notes_count,
         "averageCompletionPercent": avg_completion,
         "assignments": assignment_rows,
     }
-    if can_view_roster:
-        overview["students"] = enrich_rows([{"userId": s.user_id} for s in students])
-        overview["teachers"] = enrich_rows([{"userId": t.user_id} for t in teachers])
+    overview["students"] = enrich_rows([{"userId": s.user_id} for s in students])
+    overview["teachers"] = enrich_rows([{"userId": tid} for tid in teacher_ids])
     return overview
 
 
