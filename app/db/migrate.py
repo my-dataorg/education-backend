@@ -619,6 +619,26 @@ def migrate_mvp_domains(engine: Engine) -> None:
         )
 
 
+def migrate_institute_soft_delete(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                ALTER TABLE institutes
+                ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                ALTER TABLE institutes
+                ADD COLUMN IF NOT EXISTS deactivated_at TIMESTAMPTZ
+                """
+            )
+        )
+
+
 def migrate_institute_profile(engine: Engine) -> None:
     with engine.begin() as conn:
         for table, columns in (

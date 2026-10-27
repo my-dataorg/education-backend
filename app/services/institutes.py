@@ -1,25 +1,18 @@
 from datetime import date, datetime, timezone
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import (
     Assignment,
     Branch,
-    DailyNote,
     Institute,
     InstituteInvitation,
     InstituteMember,
     InstituteRoleSettings,
-    ScheduleSettings,
-    ScheduleSlot,
     Section,
     SectionMember,
-    SectionSubject,
-    SectionSubjectStudentAssignment,
     Submission,
-    TeacherSubjectAssignment,
-    TimetableEntry,
 )
 from app.roles import MANAGE_ROLES, STAFF_ROLES, STUDENT_ROLE, TEACHING_STAFF_ROLES, VIEW_DIRECTORY_ROLES
 from app.services.user_identity import enrich_rows
@@ -35,6 +28,9 @@ def get_membership(db: Session, institute_id: str, user_id: str) -> InstituteMem
 
 
 def require_membership(db: Session, institute_id: str, user_id: str) -> InstituteMember:
+    inst = db.get(Institute, institute_id)
+    if not inst or not inst.is_active:
+        raise PermissionError("Not a member of this institute")
     member = get_membership(db, institute_id, user_id)
     if not member:
         raise PermissionError("Not a member of this institute")
@@ -98,7 +94,7 @@ def list_user_institutes(db: Session, user_id: str) -> list[Institute]:
     stmt = (
         select(Institute)
         .join(InstituteMember)
-        .where(InstituteMember.user_id == user_id)
+        .where(InstituteMember.user_id == user_id, Institute.is_active.is_(True))
         .order_by(Institute.name)
     )
     return list(db.scalars(stmt))
@@ -608,42 +604,11 @@ def delete_institute(db: Session, institute_id: str, user_id: str) -> None:
     inst = db.get(Institute, institute_id)
     if not inst:
         raise ValueError("Institute not found")
+    if not inst.is_active:
+        return
 
-    sections = db.scalars(select(Section).where(Section.institute_id == institute_id)).all()
-    for section in sections:
-        assignment_ids = db.scalars(
-            select(Assignment.id).where(Assignment.section_id == section.id)
-        ).all()
-        for aid in assignment_ids:
-            db.execute(delete(Submission).where(Submission.assignment_id == aid))
-        db.execute(delete(Assignment).where(Assignment.section_id == section.id))
-        db.execute(delete(DailyNote).where(DailyNote.section_id == section.id))
-        db.execute(delete(SectionMember).where(SectionMember.section_id == section.id))
-
-    db.execute(
-        delete(TeacherSubjectAssignment).where(
-            TeacherSubjectAssignment.section_id.in_([section.id for section in sections])
-        )
-    )
-    db.execute(
-        delete(SectionSubjectStudentAssignment).where(
-            SectionSubjectStudentAssignment.section_id.in_([section.id for section in sections])
-        )
-    )
-    db.execute(
-        delete(SectionSubject).where(
-            SectionSubject.section_id.in_([section.id for section in sections])
-        )
-    )
-    from app.services.schedule import _clear_schedule_slots
-
-    _clear_schedule_slots(db, institute_id)
-    db.execute(delete(ScheduleSettings).where(ScheduleSettings.institute_id == institute_id))
-    db.execute(delete(Section).where(Section.institute_id == institute_id))
-    db.execute(delete(InstituteInvitation).where(InstituteInvitation.institute_id == institute_id))
-    db.execute(delete(Branch).where(Branch.institute_id == institute_id))
-    db.execute(delete(InstituteMember).where(InstituteMember.institute_id == institute_id))
-    db.delete(inst)
+    inst.is_active = False
+    inst.deactivated_at = datetime.now(timezone.utc)
     db.commit()
 
 

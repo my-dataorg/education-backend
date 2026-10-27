@@ -129,7 +129,8 @@ def test_rejects_paths_outside_the_lab_folder():
     )
     nested = client.post("/v1/lab/run", json={"name": "nested/main.py", "source": "print(1)\n"})
     assert escaped.status_code == 400
-    assert nested.status_code == 400
+    assert nested.status_code == 200
+    assert nested.json()["stdout"].strip() == "1"
 
 
 def test_open_folder_keeps_existing_venv(tmp_path):
@@ -238,10 +239,8 @@ def test_open_folder_that_is_itself_an_environment(tmp_path):
     assert attached.json()["files"] == ["main.py"]
     assert attached.json()["python"] == str(env / "bin" / "python")
 
-    opened = client.post("/v1/lab/open", json={"path": str(env)})
-    assert opened.status_code == 200
-    assert opened.json()["venv"] == "mytestvenv"
-    assert opened.json()["python"] == str(env / "bin" / "python")
+    blocked = client.post("/v1/lab/open", json={"path": str(env)})
+    assert blocked.status_code == 400
 
 
 def test_rejects_folders_outside_home():

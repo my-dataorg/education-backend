@@ -29,6 +29,7 @@ from app.db.migrate import (
     migrate_timetable_school_defaults,
     migrate_mvp_domains,
     migrate_institute_profile,
+    migrate_institute_soft_delete,
     migrate_parent_guardian_messaging,
     migrate_section_class_teacher,
     migrate_section_attendance_days,
@@ -399,6 +400,7 @@ async def lifespan(_: FastAPI):
     migrate_mvp_domains(engine)
     migrate_parent_guardian_messaging(engine)
     migrate_institute_profile(engine)
+    migrate_institute_soft_delete(engine)
     migrate_section_class_teacher(engine)
     migrate_section_attendance_days(engine)
     migrate_attendance_subject_registers(engine)
@@ -522,7 +524,7 @@ def lookup_institute(
     _: User = Depends(get_current_user),
 ):
     inst = db.scalar(select(Institute).where(Institute.join_code == joinCode.upper()))
-    if not inst:
+    if not inst or not inst.is_active:
         raise HTTPException(status_code=404, detail="Invalid join code")
     return InstituteLookupOut(id=inst.id, name=inst.name)
 

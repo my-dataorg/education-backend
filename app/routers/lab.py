@@ -20,6 +20,7 @@ class LabWorkspaceOut(BaseModel):
 class LabBrowseOut(BaseModel):
     path: str
     parent: str | None = None
+    home: str = ""
     dirs: list[str]
     venvs: list[str]
     files: list[str]
@@ -102,20 +103,20 @@ def choose_lab_venv(body: LabVenvIn, user: dict = Depends(_user)):
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
-@router.get("/files/{name}", response_model=LabFileOut)
-def get_lab_file(name: str, user: dict = Depends(_user)):
+@router.get("/files/{file_path:path}", response_model=LabFileOut)
+def get_lab_file(file_path: str, user: dict = Depends(_user)):
     try:
-        return lab.read_file(user["id"], name)
+        return lab.read_file(user["id"], file_path)
     except lab.LabNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except lab.LabBadRequest as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.put("/files/{name}", response_model=LabSavedOut)
-def put_lab_file(name: str, body: LabFileIn, user: dict = Depends(_user)):
+@router.put("/files/{file_path:path}", response_model=LabSavedOut)
+def put_lab_file(file_path: str, body: LabFileIn, user: dict = Depends(_user)):
     try:
-        return lab.write_file(user["id"], name, body.source)
+        return lab.write_file(user["id"], file_path, body.source)
     except lab.LabBadRequest as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except lab.LabUnavailable as exc:

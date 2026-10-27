@@ -52,6 +52,7 @@ def browse(path: str) -> dict:
             "dirs": [],
             "venvs": [],
             "files": [],
+            "home": str(Path.home().resolve()),
             "isVenv": True,
         }
     dirs: list[str] = []
@@ -70,12 +71,11 @@ def browse(path: str) -> dict:
         if _is_venv(child):
             venvs.append(child.name)
             continue
-        if child.name.startswith("."):
-            continue
         dirs.append(child.name)
     return {
         "path": str(root),
         "parent": parent,
+        "home": str(Path.home().resolve()),
         "dirs": dirs,
         "venvs": venvs,
         "files": files,
@@ -85,11 +85,10 @@ def browse(path: str) -> dict:
 
 def open_folder(user_id: str, path: str) -> dict:
     root = _allowed_dir(path)
-    if _ready_venv(root):
-        chosen = str(root)
-    else:
-        dot = (root / ".venv").resolve()
-        chosen = str(dot) if _ready_venv(dot) else ""
+    if _is_venv(root):
+        raise LabBadRequest("Choose the project folder, not the Python environment folder.")
+    dot = (root / ".venv").resolve()
+    chosen = str(dot) if _ready_venv(dot) else ""
     _save_state(user_id, root, chosen)
     return list_files(user_id)
 
@@ -114,7 +113,7 @@ def choose_venv(user_id: str, path: str, create: bool, name: str = ".venv") -> d
 
 def list_files(user_id: str) -> dict:
     root, venv_path = ensure_workspace(user_id)
-    names = sorted(path.name for path in root.glob("*.py") if path.is_file())
+    names = _project_py_files(root)
     return {
         "root": str(root),
         "python": str(_interpreter(venv_path)) if venv_path else "",
@@ -127,18 +126,22 @@ def list_files(user_id: str) -> dict:
 
 
 def read_file(user_id: str, name: str) -> dict:
+    root, _venv_path = ensure_workspace(user_id)
     path = _file_path(user_id, name)
     if not path.is_file():
         raise LabNotFound("File not found")
-    return {"name": path.name, "source": path.read_text(encoding="utf-8")}
+    rel = path.relative_to(root).as_posix()
+    return {"name": rel, "source": path.read_text(encoding="utf-8")}
 
 
 def write_file(user_id: str, name: str, source: str) -> dict:
     if len(source) > MAX_SOURCE_CHARS:
         raise LabBadRequest("Program is too long")
+    root, _venv_path = ensure_workspace(user_id)
     path = _file_path(user_id, name)
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(source, encoding="utf-8")
-    return {"name": path.name}
+    return {"name": path.relative_to(root).as_posix()}
 
 
 def run_file(user_id: str, name: str, source: str | None = None) -> dict:
@@ -150,8 +153,9 @@ def run_file(user_id: str, name: str, source: str | None = None) -> dict:
     root, venv_path = _require_venv(user_id)
     python = _interpreter(venv_path)
     stop_program(user_id)
+    rel = path.relative_to(root)
     proc = subprocess.Popen(
-        [str(python), "-u", path.name],
+        [str(python), "-u", str(rel)],
         cwd=root,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -509,12 +513,31 @@ def _python(root: Path, venv_name: str = ".venv") -> Path:
 
 
 def _file_path(user_id: str, name: str) -> Path:
-    safe = _py_name(name)
+    rel = _rel_py_path(name)
     root, _venv_path = ensure_workspace(user_id)
-    path = (root / safe).resolve()
-    if path.parent != root:
-        raise LabBadRequest("Use a simple file name")
+    path = (root / rel).resolve()
+    if root != path and root not in path.parents:
+        raise LabBadRequest("File path must stay in the project folder")
     return path
+
+
+def _project_py_files(root: Path) -> list[str]:
+    names: list[str] = []
+    for path in sorted(root.rglob("*.py")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(root)
+        if _path_skipped(rel):
+            continue
+        names.append(rel.as_posix())
+    return names
+
+
+def _path_skipped(rel: Path) -> bool:
+    for part in rel.parts:
+        if part in _SKIP_DIRS or part == ".venv":
+            return True
+    return False
 
 
 def _venv_dir_name(name: str) -> str:
@@ -526,13 +549,21 @@ def _venv_dir_name(name: str) -> str:
     return folder
 
 
-def _py_name(name: str) -> str:
-    if not name.endswith(".py") or "/" in name or "\\" in name or name.startswith("."):
-        raise LabBadRequest("Use a simple .py file name")
-    stem = name[: -len(".py")]
-    if not stem or not all(char.isalnum() or char in "-_" for char in stem):
-        raise LabBadRequest("Use a simple .py file name")
-    return name
+def _rel_py_path(name: str) -> str:
+    raw = name.replace("\\", "/").strip().lstrip("/")
+    if not raw.endswith(".py") or ".." in raw.split("/"):
+        raise LabBadRequest("Use a .py file path inside the project folder")
+    parts = [part for part in raw.split("/") if part]
+    if not parts:
+        raise LabBadRequest("Use a .py file path inside the project folder")
+    for part in parts:
+        if part.startswith(".") and part != part.strip():
+            raise LabBadRequest("Use a .py file path inside the project folder")
+        if not all(char.isalnum() or char in "-_." for char in part):
+            raise LabBadRequest("Use a .py file path inside the project folder")
+    if not parts[-1].endswith(".py"):
+        raise LabBadRequest("Use a .py file path inside the project folder")
+    return "/".join(parts)
 
 
 def _state_path(user_id: str) -> Path:

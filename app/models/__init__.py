@@ -25,6 +25,8 @@ class Institute(Base):
     state: Mapped[str] = mapped_column(String(100), default="")
     postal_code: Mapped[str] = mapped_column(String(20), default="")
     contact_name: Mapped[str] = mapped_column(String(200), default="")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    deactivated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
