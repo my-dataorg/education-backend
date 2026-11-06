@@ -983,6 +983,26 @@ class InstituteRoleSettingsUpdate(BaseModel):
     principalCanEditTimetable: bool | None = None
 
 
+class NavFeatureRoleRule(BaseModel):
+    visible: bool | None = None
+    editable: bool | None = None
+
+
+class NavAccessOverridesUpdate(BaseModel):
+    overrides: dict[str, dict[str, NavFeatureRoleRule]] = Field(default_factory=dict)
+
+
+class NavAccessMatrixOut(BaseModel):
+    featureIds: list[str]
+    roles: list[str]
+    overrides: dict[str, dict[str, NavFeatureRoleRule]]
+
+
+class NavAccessEffectiveOut(BaseModel):
+    role: str
+    overrides: dict[str, dict[str, NavFeatureRoleRule]]
+
+
 class SpecialDayActivityIn(BaseModel):
     activityId: str
     start: str

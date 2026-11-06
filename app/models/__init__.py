@@ -2,7 +2,7 @@ import secrets
 import uuid
 from datetime import date, datetime, time
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, Text, Time, UniqueConstraint, func
+from sqlalchemy import JSON, Boolean, Date, DateTime, ForeignKey, Integer, String, Text, Time, UniqueConstraint, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -456,6 +456,7 @@ class InstituteRoleSettings(Base):
     institute_id: Mapped[str] = mapped_column(String(36), ForeignKey("institutes.id"), primary_key=True)
     principal_can_edit_timetable: Mapped[bool] = mapped_column(Boolean, default=True)
     absence_alert_days: Mapped[int] = mapped_column(Integer, default=3)
+    nav_access_overrides: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
 class TimetableSubstitution(Base):

@@ -393,6 +393,14 @@ def migrate_institute_role_settings(engine: Engine) -> None:
                 """
             )
         )
+        conn.execute(
+            text(
+                """
+                ALTER TABLE institute_role_settings
+                ADD COLUMN IF NOT EXISTS nav_access_overrides JSONB
+                """
+            )
+        )
 
 
 def migrate_timetable_substitutions(engine: Engine) -> None:

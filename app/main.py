@@ -146,6 +146,9 @@ from app.schemas import (
     SyllabusTreeOut,
     InstituteRoleSettingsOut,
     InstituteRoleSettingsUpdate,
+    NavAccessEffectiveOut,
+    NavAccessMatrixOut,
+    NavAccessOverridesUpdate,
     TimetableAutoFillIn,
     TimetableAutoFillOut,
     TimetableSubstitutionsOut,
@@ -312,6 +315,11 @@ from app.services.special_days import (
     list_special_days,
 )
 from app.services.role_settings import get_role_settings, update_role_settings
+from app.services.nav_access import (
+    get_nav_access_effective,
+    get_nav_access_matrix,
+    update_nav_access_matrix,
+)
 from app.services.teacher_coverage import (
     list_absences,
     remove_absence,
@@ -1834,6 +1842,52 @@ def write_role_settings(
 ):
     try:
         return update_role_settings(db, institute_id, user["id"], body)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+
+
+@app.get(
+    "/v1/institutes/{institute_id}/nav-access",
+    response_model=NavAccessEffectiveOut,
+)
+def read_nav_access_effective(
+    institute_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        return get_nav_access_effective(db, institute_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+
+
+@app.get(
+    "/v1/institutes/{institute_id}/nav-access/matrix",
+    response_model=NavAccessMatrixOut,
+)
+def read_nav_access_matrix(
+    institute_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        return get_nav_access_matrix(db, institute_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+
+
+@app.put(
+    "/v1/institutes/{institute_id}/nav-access/matrix",
+    response_model=NavAccessMatrixOut,
+)
+def write_nav_access_matrix(
+    institute_id: str,
+    body: NavAccessOverridesUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        return update_nav_access_matrix(db, institute_id, user["id"], body)
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
 
