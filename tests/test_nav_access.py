@@ -65,6 +65,16 @@ def test_nav_access_matrix_owner_only(db: Session, client: TestClient):
     assert body["overrides"] == {}
 
 
+def test_nav_access_classes_tab_keys(db: Session, client: TestClient):
+    seed(db)
+    main.app.dependency_overrides[main.require_education_subscription] = (
+        lambda: {"id": "owner", "email": "o@example.com", "token": "test"}
+    )
+    r = client.get("/v1/institutes/inst-1/nav-access/matrix")
+    assert r.status_code == 200
+    assert "classes.timetable" in r.json()["featureIds"]
+
+
 def test_nav_access_save_and_read(db: Session, client: TestClient):
     seed(db)
     main.app.dependency_overrides[main.require_education_subscription] = (
