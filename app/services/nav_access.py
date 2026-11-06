@@ -6,10 +6,19 @@ from sqlalchemy.orm import Session
 
 from app.services.institutes import _role_settings, require_membership, require_owner
 
-# Configurable sidebar features (matches education-frontend catalog subset).
+# Configurable features (main nav + class workspace section tabs under Classes).
 CONFIGURABLE_NAV_IDS = (
     "overview",
     "classes",
+    "classes.overview",
+    "classes.roster",
+    "classes.subjects",
+    "classes.syllabus",
+    "classes.timetable",
+    "classes.attendance",
+    "classes.assignments",
+    "classes.class-board",
+    "classes.progress",
     "exams",
     "timetable",
     "attendance",
