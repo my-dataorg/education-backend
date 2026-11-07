@@ -1274,6 +1274,8 @@ class StudentFeeAssign(BaseModel):
     studentId: str
     feeStructureId: str
     amountPaise: int | None = None
+    feePlanId: str | None = None
+    sectionId: str | None = None
 
 
 class StudentFeeDueOut(BaseModel):
@@ -1282,6 +1284,76 @@ class StudentFeeDueOut(BaseModel):
     amountPaise: int
     paidPaise: int
     balancePaise: int
+    feePlanId: str | None = None
+    sectionId: str | None = None
+    feePlanName: str | None = None
+    installmentCount: int = 1
+    discountPercent: int = 0
+    lateFeePaise: int = 0
+    installmentAmountPaise: int = 0
+
+
+class FeePlanCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    installmentCount: int = Field(default=1, ge=1, le=24)
+    discountPercent: int = Field(default=0, ge=0, le=100)
+    lateFeePaise: int = Field(default=0, ge=0)
+
+
+class FeePlanUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    installmentCount: int | None = Field(default=None, ge=1, le=24)
+    discountPercent: int | None = Field(default=None, ge=0, le=100)
+    lateFeePaise: int | None = Field(default=None, ge=0)
+
+
+class FeePlanOut(BaseModel):
+    id: str
+    instituteId: str
+    name: str
+    installmentCount: int
+    discountPercent: int
+    lateFeePaise: int
+
+
+class SectionFeeDefaultOut(BaseModel):
+    sectionId: str
+    amountPaise: int
+    feePlanId: str | None
+    feePlan: FeePlanOut | None = None
+
+
+class SectionFeeDefaultPut(BaseModel):
+    amountPaise: int = Field(ge=0)
+    feePlanId: str | None = None
+
+
+class SectionFeeApply(BaseModel):
+    feeStructureId: str
+
+
+class InstituteExpenseCreate(BaseModel):
+    category: str = Field(pattern="^(staff|institute)$")
+    kind: str = Field(min_length=1, max_length=32)
+    label: str = Field(min_length=1, max_length=200)
+    amountPaise: int = Field(ge=1)
+    expenseDate: date
+    teacherUserId: str | None = None
+    notes: str = ""
+
+
+class InstituteExpenseOut(BaseModel):
+    id: str
+    instituteId: str
+    category: str
+    kind: str
+    label: str
+    amountPaise: int
+    expenseDate: date
+    teacherUserId: str | None
+    notes: str
+    recordedBy: str
+    createdAt: datetime
 
 
 class PaymentCreate(BaseModel):

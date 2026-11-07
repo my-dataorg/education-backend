@@ -1100,6 +1100,48 @@ def migrate_attendance_subject_registers(engine: Engine) -> None:
         )
 
 
+def migrate_fee_finance(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS fee_plans (
+                    id VARCHAR(36) PRIMARY KEY,
+                    institute_id VARCHAR(36) NOT NULL REFERENCES institutes(id),
+                    name VARCHAR(200) NOT NULL,
+                    installment_count INTEGER NOT NULL DEFAULT 1,
+                    discount_percent INTEGER NOT NULL DEFAULT 0,
+                    late_fee_paise INTEGER NOT NULL DEFAULT 0,
+                    UNIQUE (institute_id, name)
+                );
+                CREATE TABLE IF NOT EXISTS section_fee_defaults (
+                    section_id VARCHAR(36) PRIMARY KEY REFERENCES sections(id),
+                    institute_id VARCHAR(36) NOT NULL REFERENCES institutes(id),
+                    amount_paise INTEGER NOT NULL DEFAULT 0,
+                    fee_plan_id VARCHAR(36) REFERENCES fee_plans(id)
+                );
+                CREATE TABLE IF NOT EXISTS institute_expenses (
+                    id VARCHAR(36) PRIMARY KEY,
+                    institute_id VARCHAR(36) NOT NULL REFERENCES institutes(id),
+                    category VARCHAR(32) NOT NULL,
+                    kind VARCHAR(32) NOT NULL,
+                    label VARCHAR(200) NOT NULL,
+                    amount_paise INTEGER NOT NULL,
+                    expense_date DATE NOT NULL,
+                    teacher_user_id VARCHAR(64),
+                    notes VARCHAR(500) NOT NULL DEFAULT '',
+                    recorded_by VARCHAR(64) NOT NULL,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                );
+                ALTER TABLE student_fees
+                ADD COLUMN IF NOT EXISTS fee_plan_id VARCHAR(36) REFERENCES fee_plans(id);
+                ALTER TABLE student_fees
+                ADD COLUMN IF NOT EXISTS section_id VARCHAR(36) REFERENCES sections(id);
+                """
+            )
+        )
+
+
 def seed_default_activities(db: Session) -> None:
     """Create the standard non-subject schedule activities for every institute."""
     institute_ids = db.scalars(select(Institute.id)).all()

@@ -40,7 +40,14 @@ def create_fee_structure(
 
 
 def assign_student_fee(
-    db: Session, institute_id: str, user_id: str, student_id: str, fee_structure_id: str, amount_paise: int | None
+    db: Session,
+    institute_id: str,
+    user_id: str,
+    student_id: str,
+    fee_structure_id: str,
+    amount_paise: int | None,
+    fee_plan_id: str | None = None,
+    section_id: str | None = None,
 ) -> StudentFee:
     _require_fee_manage(db, institute_id, user_id)
     structure = db.get(FeeStructure, fee_structure_id)
@@ -56,6 +63,10 @@ def assign_student_fee(
     )
     if existing:
         existing.amount_paise = billed
+        if fee_plan_id is not None:
+            existing.fee_plan_id = fee_plan_id
+        if section_id is not None:
+            existing.section_id = section_id
         db.commit()
         db.refresh(existing)
         return existing
@@ -64,6 +75,8 @@ def assign_student_fee(
         student_id=student_id,
         fee_structure_id=fee_structure_id,
         amount_paise=billed,
+        fee_plan_id=fee_plan_id,
+        section_id=section_id,
     )
     db.add(row)
     db.commit()
@@ -85,18 +98,9 @@ def list_dues(db: Session, institute_id: str, user_id: str, student_id: str | No
         stmt = stmt.where(StudentFee.student_id == student_id)
     rows = db.scalars(stmt.order_by(StudentFee.student_id))
     out: list[dict] = []
-    for fee in rows:
-        balance = max(fee.amount_paise - fee.paid_paise, 0)
-        out.append(
-            {
-                "studentId": fee.student_id,
-                "feeStructureId": fee.fee_structure_id,
-                "amountPaise": fee.amount_paise,
-                "paidPaise": fee.paid_paise,
-                "balancePaise": balance,
-            }
-        )
-    return out
+    from app.services.fee_finance import enrich_due_row
+
+    return [enrich_due_row(db, fee) for fee in rows]
 
 
 def _next_receipt_number(db: Session, institute_id: str) -> str:
