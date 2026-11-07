@@ -28,6 +28,7 @@ from app.db.migrate import (
     migrate_timetable_substitutions,
     migrate_timetable_school_defaults,
     migrate_mvp_domains,
+    migrate_fee_finance,
     migrate_institute_profile,
     migrate_institute_soft_delete,
     migrate_parent_guardian_messaging,
@@ -102,6 +103,14 @@ from app.schemas import (
     StudentFeeDueOut,
     PaymentCreate,
     PaymentOut,
+    FeePlanCreate,
+    FeePlanUpdate,
+    FeePlanOut,
+    SectionFeeDefaultOut,
+    SectionFeeDefaultPut,
+    SectionFeeApply,
+    InstituteExpenseCreate,
+    InstituteExpenseOut,
     AttendanceSummaryOut,
     AcademicTermOut,
     AcademicYearOut,
@@ -373,6 +382,7 @@ from app.services.syllabus import (
 from app.services.user_identity import enrich_rows, identity_for_user
 from app.services import exams as exam_service
 from app.services import fees as fee_service
+from app.services import fee_finance as finance_service
 from app.services.attendance_summary import get_attendance_summary
 from app.services import distribution_lists as dl_service
 from app.services import notices as notice_service
@@ -403,6 +413,7 @@ async def lifespan(_: FastAPI):
     migrate_timetable_substitutions(engine)
     migrate_timetable_school_defaults(engine)
     migrate_mvp_domains(engine)
+    migrate_fee_finance(engine)
     migrate_parent_guardian_messaging(engine)
     migrate_institute_profile(engine)
     migrate_institute_soft_delete(engine)
@@ -3796,19 +3807,20 @@ def assign_student_fee(
 ):
     try:
         row = fee_service.assign_student_fee(
-            db, institute_id, user["id"], body.studentId, body.feeStructureId, body.amountPaise
+            db,
+            institute_id,
+            user["id"],
+            body.studentId,
+            body.feeStructureId,
+            body.amountPaise,
+            body.feePlanId,
+            body.sectionId,
         )
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
-    return StudentFeeDueOut(
-        studentId=row.student_id,
-        feeStructureId=row.fee_structure_id,
-        amountPaise=row.amount_paise,
-        paidPaise=row.paid_paise,
-        balancePaise=max(row.amount_paise - row.paid_paise, 0),
-    )
+    return StudentFeeDueOut(**finance_service.enrich_due_row(db, row))
 
 
 @app.get("/v1/institutes/{institute_id}/fees/dues", response_model=list[StudentFeeDueOut])
@@ -3883,6 +3895,191 @@ def get_fee_receipt(
         recordedBy=payment.recorded_by,
         createdAt=payment.created_at,
     )
+
+
+@app.get("/v1/institutes/{institute_id}/fee-plans", response_model=list[FeePlanOut])
+def list_fee_plans(
+    institute_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        rows = finance_service.list_fee_plans(db, institute_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    return [FeePlanOut(**finance_service.plan_to_dict(r)) for r in rows]
+
+
+@app.post("/v1/institutes/{institute_id}/fee-plans", response_model=FeePlanOut, status_code=201)
+def create_fee_plan(
+    institute_id: str,
+    body: FeePlanCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        row = finance_service.create_fee_plan(
+            db,
+            institute_id,
+            user["id"],
+            body.name,
+            body.installmentCount,
+            body.discountPercent,
+            body.lateFeePaise,
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return FeePlanOut(**finance_service.plan_to_dict(row))
+
+
+@app.patch("/v1/institutes/{institute_id}/fee-plans/{plan_id}", response_model=FeePlanOut)
+def update_fee_plan(
+    institute_id: str,
+    plan_id: str,
+    body: FeePlanUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        row = finance_service.update_fee_plan(
+            db,
+            institute_id,
+            user["id"],
+            plan_id,
+            name=body.name,
+            installment_count=body.installmentCount,
+            discount_percent=body.discountPercent,
+            late_fee_paise=body.lateFeePaise,
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return FeePlanOut(**finance_service.plan_to_dict(row))
+
+
+@app.delete("/v1/institutes/{institute_id}/fee-plans/{plan_id}", status_code=204)
+def delete_fee_plan(
+    institute_id: str,
+    plan_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        finance_service.delete_fee_plan(db, institute_id, user["id"], plan_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@app.get(
+    "/v1/institutes/{institute_id}/sections/{section_id}/fee-default",
+    response_model=SectionFeeDefaultOut,
+)
+def read_section_fee_default(
+    institute_id: str,
+    section_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        data = finance_service.get_section_fee_default(db, institute_id, user["id"], section_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    plan = data.pop("feePlan", None)
+    return SectionFeeDefaultOut(**data, feePlan=FeePlanOut(**plan) if plan else None)
+
+
+@app.put(
+    "/v1/institutes/{institute_id}/sections/{section_id}/fee-default",
+    response_model=SectionFeeDefaultOut,
+)
+def write_section_fee_default(
+    institute_id: str,
+    section_id: str,
+    body: SectionFeeDefaultPut,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        data = finance_service.put_section_fee_default(
+            db, institute_id, user["id"], section_id, body.amountPaise, body.feePlanId
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    plan = data.pop("feePlan", None)
+    return SectionFeeDefaultOut(**data, feePlan=FeePlanOut(**plan) if plan else None)
+
+
+@app.post("/v1/institutes/{institute_id}/sections/{section_id}/fee-default/apply")
+def apply_section_fee_default(
+    institute_id: str,
+    section_id: str,
+    body: SectionFeeApply,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        count = finance_service.apply_section_fee_defaults(
+            db, institute_id, user["id"], section_id, body.feeStructureId
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"studentsUpdated": count}
+
+
+@app.get("/v1/institutes/{institute_id}/finance/expenses", response_model=list[InstituteExpenseOut])
+def list_finance_expenses(
+    institute_id: str,
+    category: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        rows = finance_service.list_expenses(db, institute_id, user["id"], category)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    return [InstituteExpenseOut(**finance_service.expense_to_dict(r)) for r in rows]
+
+
+@app.post(
+    "/v1/institutes/{institute_id}/finance/expenses",
+    response_model=InstituteExpenseOut,
+    status_code=201,
+)
+def create_finance_expense(
+    institute_id: str,
+    body: InstituteExpenseCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        row = finance_service.create_expense(
+            db,
+            institute_id,
+            user["id"],
+            category=body.category,
+            kind=body.kind,
+            label=body.label,
+            amount_paise=body.amountPaise,
+            expense_date=body.expenseDate,
+            teacher_user_id=body.teacherUserId,
+            notes=body.notes,
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return InstituteExpenseOut(**finance_service.expense_to_dict(row))
 
 
 @app.get("/v1/institutes/{institute_id}/calendar-events", response_model=list[CalendarEventOut])

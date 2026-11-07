@@ -19,6 +19,7 @@ CONFIGURABLE_NAV_IDS = (
     "classes.assignments",
     "classes.class-board",
     "classes.progress",
+    "classes.fees",
     "exams",
     "timetable",
     "attendance",
