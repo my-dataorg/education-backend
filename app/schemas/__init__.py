@@ -975,14 +975,6 @@ class SpecialDayListOut(BaseModel):
     items: list[SpecialDayListItemOut] = Field(default_factory=list)
 
 
-class InstituteRoleSettingsOut(BaseModel):
-    principalCanEditTimetable: bool = True
-
-
-class InstituteRoleSettingsUpdate(BaseModel):
-    principalCanEditTimetable: bool | None = None
-
-
 class NavFeatureRoleRule(BaseModel):
     visible: bool | None = None
     editable: bool | None = None
