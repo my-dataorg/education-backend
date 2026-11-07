@@ -144,8 +144,6 @@ from app.schemas import (
     SyllabusNodePatch,
     SyllabusSubjectSummaryOut,
     SyllabusTreeOut,
-    InstituteRoleSettingsOut,
-    InstituteRoleSettingsUpdate,
     NavAccessEffectiveOut,
     NavAccessMatrixOut,
     NavAccessOverridesUpdate,
@@ -314,7 +312,6 @@ from app.services.special_days import (
     delete_special_day,
     list_special_days,
 )
-from app.services.role_settings import get_role_settings, update_role_settings
 from app.services.nav_access import (
     get_nav_access_effective,
     get_nav_access_matrix,
@@ -1812,38 +1809,6 @@ def remove_special_day(
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
-
-
-@app.get(
-    "/v1/institutes/{institute_id}/role-settings",
-    response_model=InstituteRoleSettingsOut,
-)
-def read_role_settings(
-    institute_id: str,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_education_subscription),
-):
-    try:
-        require_membership(db, institute_id, user["id"])
-        return get_role_settings(db, institute_id)
-    except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e)) from e
-
-
-@app.put(
-    "/v1/institutes/{institute_id}/role-settings",
-    response_model=InstituteRoleSettingsOut,
-)
-def write_role_settings(
-    institute_id: str,
-    body: InstituteRoleSettingsUpdate,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_education_subscription),
-):
-    try:
-        return update_role_settings(db, institute_id, user["id"], body)
-    except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e)) from e
 
 
 @app.get(
