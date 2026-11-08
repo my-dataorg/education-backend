@@ -1323,16 +1323,18 @@ class SectionFeeDefaultOut(BaseModel):
     sectionId: str
     amountPaise: int
     feePlanId: str | None
+    feeStructureId: str | None = None
     feePlan: FeePlanOut | None = None
 
 
 class SectionFeeDefaultPut(BaseModel):
     amountPaise: int = Field(ge=0)
     feePlanId: str | None = None
+    feeStructureId: str | None = None
 
 
 class SectionFeeApply(BaseModel):
-    feeStructureId: str
+    feeStructureId: str | None = None
 
 
 class InstituteExpenseCreate(BaseModel):
@@ -1360,6 +1362,7 @@ class SectionFeeDefaultRowOut(BaseModel):
     sectionName: str
     amountPaise: int
     feePlanId: str | None
+    feeStructureId: str | None = None
     feePlan: FeePlanOut | None = None
 
 

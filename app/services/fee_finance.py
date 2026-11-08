@@ -5,8 +5,17 @@ from datetime import date
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import FeePlan, InstituteExpense, Payment, Section, SectionFeeDefault, SectionMember, StudentFee
-from app.services.fees import _require_fee_manage, assign_student_fee
+from app.models import (
+    FeePlan,
+    FeeStructure,
+    InstituteExpense,
+    Payment,
+    Section,
+    SectionFeeDefault,
+    SectionMember,
+    StudentFee,
+)
+from app.services.fees import _require_fee_manage, assign_student_fee, ensure_default_fee_structure
 from app.services.institutes import require_membership
 
 
@@ -117,6 +126,17 @@ def _get_section(db: Session, institute_id: str, section_id: str) -> Section:
     return section
 
 
+def _resolve_fee_structure_id(
+    db: Session, institute_id: str, user_id: str, fee_structure_id: str | None
+) -> str:
+    if fee_structure_id:
+        row = db.get(FeeStructure, fee_structure_id)
+        if not row or row.institute_id != institute_id:
+            raise ValueError("Fee structure not found")
+        return fee_structure_id
+    return ensure_default_fee_structure(db, institute_id, user_id).id
+
+
 def get_section_fee_default(db: Session, institute_id: str, user_id: str, section_id: str) -> dict:
     require_membership(db, institute_id, user_id)
     _get_section(db, institute_id, section_id)
@@ -126,6 +146,7 @@ def get_section_fee_default(db: Session, institute_id: str, user_id: str, sectio
             "sectionId": section_id,
             "amountPaise": 0,
             "feePlanId": None,
+            "feeStructureId": None,
             "feePlan": None,
         }
     plan = db.get(FeePlan, row.fee_plan_id) if row.fee_plan_id else None
@@ -133,6 +154,7 @@ def get_section_fee_default(db: Session, institute_id: str, user_id: str, sectio
         "sectionId": section_id,
         "amountPaise": row.amount_paise,
         "feePlanId": row.fee_plan_id,
+        "feeStructureId": row.fee_structure_id,
         "feePlan": plan_to_dict(plan) if plan else None,
     }
 
@@ -144,6 +166,7 @@ def put_section_fee_default(
     section_id: str,
     amount_paise: int,
     fee_plan_id: str | None,
+    fee_structure_id: str | None = None,
 ) -> dict:
     _require_fee_manage(db, institute_id, user_id)
     _get_section(db, institute_id, section_id)
@@ -153,17 +176,25 @@ def put_section_fee_default(
         plan = db.get(FeePlan, fee_plan_id)
         if not plan or plan.institute_id != institute_id:
             raise ValueError("Fee plan not found")
+    structure_id: str | None = None
+    if fee_structure_id:
+        structure_id = _resolve_fee_structure_id(db, institute_id, user_id, fee_structure_id)
     row = db.get(SectionFeeDefault, section_id)
     if row:
         row.amount_paise = amount_paise
         row.fee_plan_id = fee_plan_id
         row.institute_id = institute_id
+        if structure_id:
+            row.fee_structure_id = structure_id
     else:
+        if not structure_id:
+            structure_id = _resolve_fee_structure_id(db, institute_id, user_id, None)
         row = SectionFeeDefault(
             section_id=section_id,
             institute_id=institute_id,
             amount_paise=amount_paise,
             fee_plan_id=fee_plan_id,
+            fee_structure_id=structure_id,
         )
         db.add(row)
     db.commit()
@@ -175,14 +206,19 @@ def apply_section_fee_defaults(
     institute_id: str,
     user_id: str,
     section_id: str,
-    fee_structure_id: str,
+    fee_structure_id: str | None,
 ) -> int:
     """Assign section default fee + plan to each student in the section. Returns count updated."""
     _require_fee_manage(db, institute_id, user_id)
     _get_section(db, institute_id, section_id)
     default = db.get(SectionFeeDefault, section_id)
     if not default or default.amount_paise <= 0:
-        raise ValueError("Configure section default fee amount first")
+        raise ValueError("Set and save the class annual fee first (must be greater than zero)")
+    resolved_structure = fee_structure_id or default.fee_structure_id
+    fee_structure_id = _resolve_fee_structure_id(db, institute_id, user_id, resolved_structure)
+    if default.fee_structure_id != fee_structure_id:
+        default.fee_structure_id = fee_structure_id
+        db.commit()
     plan = db.get(FeePlan, default.fee_plan_id) if default.fee_plan_id else None
     billed = effective_amount_paise(default.amount_paise, plan)
     student_ids = db.scalars(
@@ -328,6 +364,7 @@ def list_section_fee_defaults_overview(db: Session, institute_id: str, user_id: 
                 "sectionName": section.name,
                 "amountPaise": row.amount_paise if row else 0,
                 "feePlanId": row.fee_plan_id if row else None,
+                "feeStructureId": row.fee_structure_id if row else None,
                 "feePlan": plan_to_dict(plan) if plan else None,
             }
         )

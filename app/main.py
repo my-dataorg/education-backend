@@ -4014,7 +4014,13 @@ def write_section_fee_default(
 ):
     try:
         data = finance_service.put_section_fee_default(
-            db, institute_id, user["id"], section_id, body.amountPaise, body.feePlanId
+            db,
+            institute_id,
+            user["id"],
+            section_id,
+            body.amountPaise,
+            body.feePlanId,
+            body.feeStructureId,
         )
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
