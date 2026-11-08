@@ -169,6 +169,7 @@ class FeeStructure(Base):
     academic_year_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("academic_years.id"), nullable=True)
     name: Mapped[str] = mapped_column(String(200))
     amount_paise: Mapped[int] = mapped_column(Integer)
+    org_node_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
 
 
 class FeePlan(Base):
@@ -183,6 +184,8 @@ class FeePlan(Base):
     late_fee_paise: Mapped[int] = mapped_column(Integer, default=0)
     due_schedule_notes: Mapped[str] = mapped_column(String(500), default="")
     section_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("sections.id"), nullable=True)
+    plan_type: Mapped[str] = mapped_column(String(32), default="lump_sum")
+    rules_json: Mapped[str] = mapped_column(Text, default="{}")
 
 
 class StudentFee(Base):
@@ -257,6 +260,39 @@ class StudentFeeInstallment(Base):
     sequence: Mapped[int] = mapped_column(Integer)
     due_date: Mapped[date] = mapped_column(Date)
     amount_paise: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class InstituteOrgConfig(Base):
+    __tablename__ = "institute_org_config"
+
+    institute_id: Mapped[str] = mapped_column(String(36), ForeignKey("institutes.id"), primary_key=True)
+    enabled_depth: Mapped[int] = mapped_column(Integer, default=3)
+    level_labels_json: Mapped[str] = mapped_column(Text, default="[]")
+
+
+class OrgNode(Base):
+    __tablename__ = "org_nodes"
+    __table_args__ = (UniqueConstraint("institute_id", "parent_id", "label", "level"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    institute_id: Mapped[str] = mapped_column(String(36), ForeignKey("institutes.id"), index=True)
+    parent_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("org_nodes.id"), nullable=True)
+    level: Mapped[int] = mapped_column(Integer)
+    label: Mapped[str] = mapped_column(String(200))
+    section_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("sections.id"), nullable=True)
+    student_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class OrgNodeFeeDefault(Base):
+    __tablename__ = "org_node_fee_defaults"
+
+    node_id: Mapped[str] = mapped_column(String(36), ForeignKey("org_nodes.id"), primary_key=True)
+    institute_id: Mapped[str] = mapped_column(String(36), ForeignKey("institutes.id"))
+    amount_paise: Mapped[int] = mapped_column(Integer, default=0)
+    fee_plan_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("fee_plans.id"), nullable=True)
+    fee_structure_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("fee_structures.id"), nullable=True
+    )
 
 
 class InstituteExpense(Base):

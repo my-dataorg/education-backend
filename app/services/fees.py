@@ -43,7 +43,13 @@ def list_fee_structures(db: Session, institute_id: str, user_id: str) -> list[Fe
 
 
 def create_fee_structure(
-    db: Session, institute_id: str, user_id: str, name: str, amount_paise: int, academic_year_id: str | None
+    db: Session,
+    institute_id: str,
+    user_id: str,
+    name: str,
+    amount_paise: int,
+    academic_year_id: str | None,
+    org_node_id: str | None = None,
 ) -> FeeStructure:
     _require_fee_manage(db, institute_id, user_id)
     row = FeeStructure(
@@ -51,6 +57,7 @@ def create_fee_structure(
         name=name,
         amount_paise=amount_paise,
         academic_year_id=academic_year_id,
+        org_node_id=org_node_id,
     )
     db.add(row)
     db.commit()

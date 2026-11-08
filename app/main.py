@@ -30,6 +30,7 @@ from app.db.migrate import (
     migrate_mvp_domains,
     migrate_fee_finance,
     migrate_fee_ladder,
+    migrate_fee_org_tree,
     migrate_institute_profile,
     migrate_institute_soft_delete,
     migrate_parent_guardian_messaging,
@@ -116,6 +117,13 @@ from app.schemas import (
     SectionFeeLedgerOut,
     SectionFeeLedgerStudentOut,
     FeePaymentSummaryOut,
+    InstituteOrgConfigOut,
+    InstituteOrgConfigPut,
+    OrgNodeOut,
+    OrgNodeCreate,
+    OrgNodeFeeDefaultOut,
+    OrgNodeFeeDefaultPut,
+    StudentFeesDetailOut,
     InstituteExpenseCreate,
     InstituteExpenseOut,
     AttendanceSummaryOut,
@@ -390,6 +398,7 @@ from app.services.user_identity import enrich_rows, identity_for_user
 from app.services import exams as exam_service
 from app.services import fees as fee_service
 from app.services import fee_finance as finance_service
+from app.services import org_fee as org_fee_service
 from app.services.attendance_summary import get_attendance_summary
 from app.services import distribution_lists as dl_service
 from app.services import notices as notice_service
@@ -422,6 +431,7 @@ async def lifespan(_: FastAPI):
     migrate_mvp_domains(engine)
     migrate_fee_finance(engine)
     migrate_fee_ladder(engine)
+    migrate_fee_org_tree(engine)
     migrate_parent_guardian_messaging(engine)
     migrate_institute_profile(engine)
     migrate_institute_soft_delete(engine)
@@ -3779,6 +3789,7 @@ def list_fee_structures(
             academicYearId=row.academic_year_id,
             name=row.name,
             amountPaise=row.amount_paise,
+            orgNodeId=row.org_node_id,
         )
         for row in rows
     ]
@@ -3793,7 +3804,13 @@ def create_fee_structure(
 ):
     try:
         row = fee_service.create_fee_structure(
-            db, institute_id, user["id"], body.name, body.amountPaise, body.academicYearId
+            db,
+            institute_id,
+            user["id"],
+            body.name,
+            body.amountPaise,
+            body.academicYearId,
+            body.orgNodeId,
         )
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
@@ -3803,6 +3820,7 @@ def create_fee_structure(
         academicYearId=row.academic_year_id,
         name=row.name,
         amountPaise=row.amount_paise,
+        orgNodeId=row.org_node_id,
     )
 
 
@@ -4016,6 +4034,8 @@ def create_fee_plan(
             body.dueScheduleNotes,
             body.sectionId,
             [i.model_dump(mode="json") for i in body.installments],
+            body.planType,
+            body.rules,
         )
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
@@ -4178,6 +4198,142 @@ def apply_section_fee_default(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return {"studentsUpdated": count}
+
+
+@app.get(
+    "/v1/institutes/{institute_id}/sections/{section_id}/students/{student_id}/fees",
+    response_model=StudentFeesDetailOut,
+)
+def read_student_fees_detail(
+    institute_id: str,
+    section_id: str,
+    student_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        data = finance_service.get_student_fees_detail(db, institute_id, user["id"], section_id, student_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    plan = data.pop("feePlan", None)
+    return StudentFeesDetailOut(**data, feePlan=FeePlanOut(**plan) if plan else None)
+
+
+@app.get("/v1/institutes/{institute_id}/org-config", response_model=InstituteOrgConfigOut)
+def read_org_config(
+    institute_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        data = org_fee_service.get_org_config(db, institute_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    return InstituteOrgConfigOut(**data)
+
+
+@app.put("/v1/institutes/{institute_id}/org-config", response_model=InstituteOrgConfigOut)
+def write_org_config(
+    institute_id: str,
+    body: InstituteOrgConfigPut,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        data = org_fee_service.put_org_config(
+            db,
+            institute_id,
+            user["id"],
+            body.enabledDepth,
+            [l.model_dump() for l in body.levelLabels],
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return InstituteOrgConfigOut(**data)
+
+
+@app.get("/v1/institutes/{institute_id}/org-nodes", response_model=list[OrgNodeOut])
+def list_org_nodes(
+    institute_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        rows = org_fee_service.list_org_nodes_flat(db, institute_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    return [OrgNodeOut(**r) for r in rows]
+
+
+@app.post("/v1/institutes/{institute_id}/org-nodes", response_model=OrgNodeOut, status_code=201)
+def create_org_node(
+    institute_id: str,
+    body: OrgNodeCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        row = org_fee_service.create_org_node(
+            db, institute_id, user["id"], body.parentId, body.level, body.label
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return OrgNodeOut(**row)
+
+
+@app.get(
+    "/v1/institutes/{institute_id}/org-nodes/{node_id}/fee-default",
+    response_model=OrgNodeFeeDefaultOut,
+)
+def read_org_node_fee_default(
+    institute_id: str,
+    node_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        data = org_fee_service.get_node_fee_default(db, institute_id, user["id"], node_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    plan = data.pop("feePlan", None)
+    return OrgNodeFeeDefaultOut(**data, feePlan=FeePlanOut(**plan) if plan else None)
+
+
+@app.put(
+    "/v1/institutes/{institute_id}/org-nodes/{node_id}/fee-default",
+    response_model=OrgNodeFeeDefaultOut,
+)
+def write_org_node_fee_default(
+    institute_id: str,
+    node_id: str,
+    body: OrgNodeFeeDefaultPut,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        data = org_fee_service.put_node_fee_default(
+            db,
+            institute_id,
+            user["id"],
+            node_id,
+            body.amountPaise,
+            body.feePlanId,
+            body.feeStructureId,
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    plan = data.pop("feePlan", None)
+    return OrgNodeFeeDefaultOut(**data, feePlan=FeePlanOut(**plan) if plan else None)
 
 
 @app.get("/v1/institutes/{institute_id}/finance/expenses", response_model=list[InstituteExpenseOut])

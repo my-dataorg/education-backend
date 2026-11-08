@@ -1148,6 +1148,44 @@ def migrate_fee_finance(engine: Engine) -> None:
         )
 
 
+def migrate_fee_org_tree(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS institute_org_config (
+                    institute_id VARCHAR(36) PRIMARY KEY REFERENCES institutes(id),
+                    enabled_depth INTEGER NOT NULL DEFAULT 3,
+                    level_labels_json TEXT NOT NULL DEFAULT '[]'
+                );
+                CREATE TABLE IF NOT EXISTS org_nodes (
+                    id VARCHAR(36) PRIMARY KEY,
+                    institute_id VARCHAR(36) NOT NULL REFERENCES institutes(id),
+                    parent_id VARCHAR(36) REFERENCES org_nodes(id),
+                    level INTEGER NOT NULL,
+                    label VARCHAR(200) NOT NULL,
+                    section_id VARCHAR(36) REFERENCES sections(id),
+                    student_user_id VARCHAR(64),
+                    UNIQUE (institute_id, parent_id, label, level)
+                );
+                CREATE TABLE IF NOT EXISTS org_node_fee_defaults (
+                    node_id VARCHAR(36) PRIMARY KEY REFERENCES org_nodes(id),
+                    institute_id VARCHAR(36) NOT NULL REFERENCES institutes(id),
+                    amount_paise INTEGER NOT NULL DEFAULT 0,
+                    fee_plan_id VARCHAR(36) REFERENCES fee_plans(id),
+                    fee_structure_id VARCHAR(36) REFERENCES fee_structures(id)
+                );
+                ALTER TABLE fee_plans
+                ADD COLUMN IF NOT EXISTS plan_type VARCHAR(32) NOT NULL DEFAULT 'lump_sum';
+                ALTER TABLE fee_plans
+                ADD COLUMN IF NOT EXISTS rules_json TEXT NOT NULL DEFAULT '{}';
+                ALTER TABLE fee_structures
+                ADD COLUMN IF NOT EXISTS org_node_id VARCHAR(36);
+                """
+            )
+        )
+
+
 def migrate_fee_ladder(engine: Engine) -> None:
     with engine.begin() as conn:
         conn.execute(

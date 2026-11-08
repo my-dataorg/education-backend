@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import date
 
 from sqlalchemy import select
@@ -56,6 +57,12 @@ def plan_to_dict(plan: FeePlan, section: Section | None = None, db: Session | No
             )
         )
         installments = installment_rows_to_dict(inst_rows)
+    rules: dict = {}
+    try:
+        rules = json.loads(plan.rules_json or "{}")
+    except json.JSONDecodeError:
+        rules = {}
+    plan_type = getattr(plan, "plan_type", None) or "lump_sum"
     return {
         "id": plan.id,
         "instituteId": plan.institute_id,
@@ -67,6 +74,8 @@ def plan_to_dict(plan: FeePlan, section: Section | None = None, db: Session | No
         "sectionId": plan.section_id,
         "appliesToLabel": applies,
         "installments": installments,
+        "planType": plan_type,
+        "rules": rules,
     }
 
 
@@ -112,6 +121,8 @@ def create_fee_plan(
     due_schedule_notes: str = "",
     section_id: str | None = None,
     installments: list[dict] | None = None,
+    plan_type: str = "lump_sum",
+    rules: dict | None = None,
 ) -> FeePlan:
     _require_fee_manage(db, institute_id, user_id)
     if installment_count < 1:
@@ -123,6 +134,10 @@ def create_fee_plan(
     clean_name = name.strip()
     if _plan_name_taken(db, institute_id, clean_name, section_id):
         raise ValueError("A plan with this name already exists for the same class scope")
+    allowed_types = {"installment", "sibling", "early_bird", "lump_sum"}
+    clean_type = (plan_type or "lump_sum").strip().lower()
+    if clean_type not in allowed_types:
+        raise ValueError("planType must be installment, sibling, early_bird, or lump_sum")
     row = FeePlan(
         institute_id=institute_id,
         name=clean_name,
@@ -131,6 +146,8 @@ def create_fee_plan(
         late_fee_paise=max(late_fee_paise, 0),
         due_schedule_notes=(due_schedule_notes or "").strip()[:500],
         section_id=section_id,
+        plan_type=clean_type,
+        rules_json=json.dumps(rules or {}),
     )
     db.add(row)
     db.commit()
@@ -675,7 +692,9 @@ def get_section_fee_ledger(db: Session, institute_id: str, user_id: str, section
                 "payments": [payment_summary(p) for p in payments],
                 "status": "paid" if balance == 0 and billed_total > 0 else "due" if balance > 0 else "unassigned",
                 "resolvedFrom": resolved["resolvedFrom"],
-                "resolvedFromLabel": resolved_from_label(resolved["resolvedFrom"]),
+                "resolvedFromLabel": resolved_from_label(
+                    resolved["resolvedFrom"], resolved.get("orgNodeLabel")
+                ),
                 "resolvedAmountPaise": resolved["amountPaise"],
                 "installments": resolved["installments"],
                 "nextDueDate": resolved["nextDueDate"],
@@ -686,4 +705,57 @@ def get_section_fee_ledger(db: Session, institute_id: str, user_id: str, section
         "sectionId": section_id,
         "sectionDefault": section_default,
         "students": students_out,
+    }
+
+
+def get_student_fees_detail(
+    db: Session, institute_id: str, user_id: str, section_id: str, student_id: str
+) -> dict:
+    member = require_membership(db, institute_id, user_id)
+    if member.role not in {"owner", "admin", "principal", "accountant", "teacher"}:
+        raise PermissionError("Not allowed to view student fees")
+    _get_section(db, institute_id, section_id)
+    from app.services.fee_resolution import resolve_standard_fee, resolved_from_label
+
+    resolved = resolve_standard_fee(db, institute_id, section_id, student_id)
+    fees = list(
+        db.scalars(
+            select(StudentFee).where(
+                StudentFee.institute_id == institute_id,
+                StudentFee.student_id == student_id,
+            )
+        )
+    )
+    fee_lines = [enrich_due_row(db, fee) for fee in fees]
+    balance = sum(line["balancePaise"] for line in fee_lines)
+    paid_total = sum(line["paidPaise"] for line in fee_lines)
+    billed_total = sum(line["amountPaise"] for line in fee_lines)
+    payments = list(
+        db.scalars(
+            select(Payment)
+            .where(Payment.institute_id == institute_id, Payment.student_id == student_id)
+            .order_by(Payment.created_at.desc())
+            .limit(25)
+        )
+    )
+    return {
+        "studentId": student_id,
+        "sectionId": section_id,
+        "billedPaise": billed_total or resolved["amountPaise"],
+        "paidPaise": paid_total,
+        "balancePaise": balance if billed_total else resolved["amountPaise"],
+        "status": "paid" if balance == 0 and billed_total > 0 else "due" if balance > 0 else "unassigned",
+        "fees": fee_lines,
+        "payments": [payment_summary(p) for p in payments],
+        "resolvedFrom": resolved["resolvedFrom"],
+        "resolvedFromLabel": resolved_from_label(
+            resolved["resolvedFrom"], resolved.get("orgNodeLabel")
+        ),
+        "orgNodeId": resolved.get("orgNodeId"),
+        "orgNodeLabel": resolved.get("orgNodeLabel"),
+        "resolvedAmountPaise": resolved["amountPaise"],
+        "baseAmountPaise": resolved["baseAmountPaise"],
+        "feePlan": resolved.get("feePlan"),
+        "installments": resolved["installments"],
+        "nextDueDate": resolved["nextDueDate"],
     }

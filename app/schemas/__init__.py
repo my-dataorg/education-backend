@@ -1260,6 +1260,7 @@ class FeeStructureCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     amountPaise: int = Field(ge=1)
     academicYearId: str | None = None
+    orgNodeId: str | None = None
 
 
 class FeeStructureOut(BaseModel):
@@ -1268,6 +1269,7 @@ class FeeStructureOut(BaseModel):
     academicYearId: str | None
     name: str
     amountPaise: int
+    orgNodeId: str | None = None
 
 
 class FeeInstallmentIn(BaseModel):
@@ -1315,6 +1317,8 @@ class FeePlanCreate(BaseModel):
     dueScheduleNotes: str = Field(default="", max_length=500)
     sectionId: str | None = None
     installments: list[FeeInstallmentIn] = Field(default_factory=list)
+    planType: str = Field(default="lump_sum", max_length=32)
+    rules: dict[str, Any] = Field(default_factory=dict)
 
 
 class FeePlanUpdate(BaseModel):
@@ -1336,6 +1340,55 @@ class FeePlanOut(BaseModel):
     sectionId: str | None = None
     appliesToLabel: str = "All classes"
     installments: list[FeeInstallmentOut] = Field(default_factory=list)
+    planType: str = "lump_sum"
+    rules: dict[str, Any] = Field(default_factory=dict)
+
+
+class OrgLevelLabelIn(BaseModel):
+    level: int = Field(ge=1, le=5)
+    label: str = Field(min_length=1, max_length=80)
+    enabled: bool = True
+
+
+class InstituteOrgConfigPut(BaseModel):
+    enabledDepth: int = Field(ge=3, le=5)
+    levelLabels: list[OrgLevelLabelIn]
+
+
+class InstituteOrgConfigOut(BaseModel):
+    instituteId: str
+    enabledDepth: int
+    levelLabels: list[OrgLevelLabelIn]
+
+
+class OrgNodeOut(BaseModel):
+    id: str
+    instituteId: str
+    parentId: str | None = None
+    level: int
+    label: str
+    sectionId: str | None = None
+    studentUserId: str | None = None
+
+
+class OrgNodeCreate(BaseModel):
+    parentId: str | None = None
+    level: int = Field(ge=1, le=5)
+    label: str = Field(min_length=1, max_length=200)
+
+
+class OrgNodeFeeDefaultPut(BaseModel):
+    amountPaise: int = Field(ge=0)
+    feePlanId: str | None = None
+    feeStructureId: str | None = None
+
+
+class OrgNodeFeeDefaultOut(BaseModel):
+    nodeId: str
+    amountPaise: int
+    feePlanId: str | None = None
+    feeStructureId: str | None = None
+    feePlan: FeePlanOut | None = None
 
 
 class FeeLadderDefaultPut(BaseModel):
@@ -1388,6 +1441,26 @@ class FeePaymentSummaryOut(BaseModel):
     reference: str
     receiptNumber: str
     createdAt: datetime
+
+
+class StudentFeesDetailOut(BaseModel):
+    studentId: str
+    sectionId: str
+    billedPaise: int
+    paidPaise: int
+    balancePaise: int
+    status: str
+    fees: list[StudentFeeDueOut]
+    payments: list[FeePaymentSummaryOut]
+    resolvedFrom: str = "none"
+    resolvedFromLabel: str = "Not set"
+    orgNodeId: str | None = None
+    orgNodeLabel: str | None = None
+    resolvedAmountPaise: int = 0
+    baseAmountPaise: int = 0
+    feePlan: FeePlanOut | None = None
+    installments: list[FeeInstallmentOut] = Field(default_factory=list)
+    nextDueDate: str | None = None
 
 
 class SectionFeeDefaultRowOut(BaseModel):
