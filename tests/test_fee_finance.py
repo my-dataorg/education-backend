@@ -51,6 +51,15 @@ def seed(db: Session) -> tuple[str, str]:
     return inst.id, section.id
 
 
+def test_list_fee_structures_ensures_default_head(client: TestClient, db: Session):
+    institute_id, _ = seed(db)
+    res = client.get(f"/v1/institutes/{institute_id}/fee-structures")
+    assert res.status_code == 200
+    items = res.json()
+    assert len(items) == 1
+    assert items[0]["name"] == "Annual tuition"
+
+
 def test_fee_plan_and_section_default(client: TestClient, db: Session):
     institute_id, section_id = seed(db)
     plan = client.post(

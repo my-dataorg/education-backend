@@ -206,6 +206,9 @@ class SectionFeeDefault(Base):
     institute_id: Mapped[str] = mapped_column(String(36), ForeignKey("institutes.id"))
     amount_paise: Mapped[int] = mapped_column(Integer, default=0)
     fee_plan_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("fee_plans.id"), nullable=True)
+    fee_structure_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("fee_structures.id"), nullable=True
+    )
 
 
 class InstituteExpense(Base):

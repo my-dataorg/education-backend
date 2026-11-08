@@ -12,15 +12,34 @@ def _require_fee_manage(db: Session, institute_id: str, user_id: str) -> None:
         raise PermissionError("Fee management role required")
 
 
+DEFAULT_FEE_HEAD_NAME = "Annual tuition"
+
+
+def ensure_default_fee_structure(db: Session, institute_id: str, user_id: str) -> FeeStructure:
+    _require_fee_manage(db, institute_id, user_id)
+    row = db.scalar(
+        select(FeeStructure)
+        .where(FeeStructure.institute_id == institute_id)
+        .order_by(FeeStructure.name)
+        .limit(1)
+    )
+    if row:
+        return row
+    return create_fee_structure(db, institute_id, user_id, DEFAULT_FEE_HEAD_NAME, 0, None)
+
+
 def list_fee_structures(db: Session, institute_id: str, user_id: str) -> list[FeeStructure]:
     _require_fee_manage(db, institute_id, user_id)
-    return list(
+    rows = list(
         db.scalars(
             select(FeeStructure)
             .where(FeeStructure.institute_id == institute_id)
             .order_by(FeeStructure.name)
         )
     )
+    if not rows:
+        return [ensure_default_fee_structure(db, institute_id, user_id)]
+    return rows
 
 
 def create_fee_structure(
