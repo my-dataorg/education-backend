@@ -1148,6 +1148,48 @@ def migrate_fee_finance(engine: Engine) -> None:
         )
 
 
+def migrate_fee_ladder(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS institute_fee_defaults (
+                    institute_id VARCHAR(36) PRIMARY KEY REFERENCES institutes(id),
+                    amount_paise INTEGER NOT NULL DEFAULT 0,
+                    fee_plan_id VARCHAR(36) REFERENCES fee_plans(id),
+                    fee_structure_id VARCHAR(36) REFERENCES fee_structures(id)
+                );
+                CREATE TABLE IF NOT EXISTS class_fee_defaults (
+                    institute_id VARCHAR(36) NOT NULL REFERENCES institutes(id),
+                    class_name VARCHAR(200) NOT NULL,
+                    amount_paise INTEGER NOT NULL DEFAULT 0,
+                    fee_plan_id VARCHAR(36) REFERENCES fee_plans(id),
+                    fee_structure_id VARCHAR(36) REFERENCES fee_structures(id),
+                    PRIMARY KEY (institute_id, class_name)
+                );
+                CREATE TABLE IF NOT EXISTS fee_plan_installments (
+                    id VARCHAR(36) PRIMARY KEY,
+                    fee_plan_id VARCHAR(36) NOT NULL REFERENCES fee_plans(id),
+                    sequence INTEGER NOT NULL,
+                    due_date DATE NOT NULL,
+                    amount_paise INTEGER,
+                    UNIQUE (fee_plan_id, sequence)
+                );
+                CREATE TABLE IF NOT EXISTS student_fee_installments (
+                    id VARCHAR(36) PRIMARY KEY,
+                    student_fee_id VARCHAR(36) NOT NULL REFERENCES student_fees(id),
+                    sequence INTEGER NOT NULL,
+                    due_date DATE NOT NULL,
+                    amount_paise INTEGER,
+                    UNIQUE (student_fee_id, sequence)
+                );
+                ALTER TABLE student_fees
+                ADD COLUMN IF NOT EXISTS payment_notes VARCHAR(500) NOT NULL DEFAULT '';
+                """
+            )
+        )
+
+
 def seed_default_activities(db: Session) -> None:
     """Create the standard non-subject schedule activities for every institute."""
     institute_ids = db.scalars(select(Institute.id)).all()

@@ -29,6 +29,7 @@ from app.db.migrate import (
     migrate_timetable_school_defaults,
     migrate_mvp_domains,
     migrate_fee_finance,
+    migrate_fee_ladder,
     migrate_institute_profile,
     migrate_institute_soft_delete,
     migrate_parent_guardian_messaging,
@@ -106,6 +107,8 @@ from app.schemas import (
     FeePlanCreate,
     FeePlanUpdate,
     FeePlanOut,
+    FeeLadderDefaultPut,
+    FeeLadderDefaultOut,
     SectionFeeDefaultOut,
     SectionFeeDefaultPut,
     SectionFeeApply,
@@ -418,6 +421,7 @@ async def lifespan(_: FastAPI):
     migrate_timetable_school_defaults(engine)
     migrate_mvp_domains(engine)
     migrate_fee_finance(engine)
+    migrate_fee_ladder(engine)
     migrate_parent_guardian_messaging(engine)
     migrate_institute_profile(engine)
     migrate_institute_soft_delete(engine)
@@ -3819,7 +3823,12 @@ def assign_student_fee(
             body.amountPaise,
             body.feePlanId,
             body.sectionId,
+            body.paymentNotes,
         )
+        if body.installments:
+            finance_service.replace_student_fee_installments(
+                db, row.id, [i.model_dump(mode="json") for i in body.installments]
+            )
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ValueError as e:
@@ -3901,6 +3910,80 @@ def get_fee_receipt(
     )
 
 
+@app.get("/v1/institutes/{institute_id}/fee-default", response_model=FeeLadderDefaultOut)
+def read_institute_fee_default(
+    institute_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        data = finance_service.get_institute_fee_default(db, institute_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    return FeeLadderDefaultOut(**data)
+
+
+@app.put("/v1/institutes/{institute_id}/fee-default", response_model=FeeLadderDefaultOut)
+def write_institute_fee_default(
+    institute_id: str,
+    body: FeeLadderDefaultPut,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        data = finance_service.put_institute_fee_default(
+            db,
+            institute_id,
+            user["id"],
+            body.amountPaise,
+            body.feePlanId,
+            body.feeStructureId,
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return FeeLadderDefaultOut(**data)
+
+
+@app.get("/v1/institutes/{institute_id}/class-fee-defaults", response_model=list[FeeLadderDefaultOut])
+def list_class_fee_defaults(
+    institute_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        rows = finance_service.list_class_fee_defaults(db, institute_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    return [FeeLadderDefaultOut(**r) for r in rows]
+
+
+@app.put("/v1/institutes/{institute_id}/classes/{class_name}/fee-default", response_model=FeeLadderDefaultOut)
+def write_class_fee_default(
+    institute_id: str,
+    class_name: str,
+    body: FeeLadderDefaultPut,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        data = finance_service.put_class_fee_default(
+            db,
+            institute_id,
+            user["id"],
+            class_name,
+            body.amountPaise,
+            body.feePlanId,
+            body.feeStructureId,
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return FeeLadderDefaultOut(**data)
+
+
 @app.get("/v1/institutes/{institute_id}/fee-plans", response_model=list[FeePlanOut])
 def list_fee_plans(
     institute_id: str,
@@ -3932,13 +4015,14 @@ def create_fee_plan(
             body.lateFeePaise,
             body.dueScheduleNotes,
             body.sectionId,
+            [i.model_dump(mode="json") for i in body.installments],
         )
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     section = db.get(Section, row.section_id) if row.section_id else None
-    return FeePlanOut(**finance_service.plan_to_dict(row, section))
+    return FeePlanOut(**finance_service.plan_to_dict(row, section, db))
 
 
 @app.patch("/v1/institutes/{institute_id}/fee-plans/{plan_id}", response_model=FeePlanOut)
