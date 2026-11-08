@@ -1342,6 +1342,40 @@ class InstituteExpenseCreate(BaseModel):
     notes: str = ""
 
 
+class FeePaymentSummaryOut(BaseModel):
+    id: str
+    amountPaise: int
+    method: str
+    reference: str
+    receiptNumber: str
+    createdAt: datetime
+
+
+class SectionFeeDefaultRowOut(BaseModel):
+    sectionId: str
+    className: str
+    sectionName: str
+    amountPaise: int
+    feePlanId: str | None
+    feePlan: FeePlanOut | None = None
+
+
+class SectionFeeLedgerStudentOut(BaseModel):
+    studentId: str
+    billedPaise: int
+    paidPaise: int
+    balancePaise: int
+    status: str
+    fees: list[StudentFeeDueOut]
+    payments: list[FeePaymentSummaryOut]
+
+
+class SectionFeeLedgerOut(BaseModel):
+    sectionId: str
+    sectionDefault: SectionFeeDefaultOut
+    students: list[SectionFeeLedgerStudentOut]
+
+
 class InstituteExpenseOut(BaseModel):
     id: str
     instituteId: str

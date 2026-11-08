@@ -5,7 +5,7 @@ from datetime import date
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import FeePlan, InstituteExpense, Section, SectionFeeDefault, SectionMember, StudentFee
+from app.models import FeePlan, InstituteExpense, Payment, Section, SectionFeeDefault, SectionMember, StudentFee
 from app.services.fees import _require_fee_manage, assign_student_fee
 from app.services.institutes import require_membership
 
@@ -286,4 +286,99 @@ def enrich_due_row(db: Session, fee: StudentFee) -> dict:
         "discountPercent": plan.discount_percent if plan else 0,
         "lateFeePaise": plan.late_fee_paise if plan else 0,
         "installmentAmountPaise": per_installment,
+    }
+
+
+def payment_summary(payment: Payment) -> dict:
+    return {
+        "id": payment.id,
+        "amountPaise": payment.amount_paise,
+        "method": payment.method,
+        "reference": payment.reference,
+        "receiptNumber": payment.receipt_number,
+        "createdAt": payment.created_at,
+    }
+
+
+def list_section_fee_defaults_overview(db: Session, institute_id: str, user_id: str) -> list[dict]:
+    _require_fee_manage(db, institute_id, user_id)
+    sections = list(
+        db.scalars(
+            select(Section).where(Section.institute_id == institute_id).order_by(Section.class_name, Section.name)
+        )
+    )
+    defaults = {
+        row.section_id: row
+        for row in db.scalars(select(SectionFeeDefault).where(SectionFeeDefault.institute_id == institute_id))
+    }
+    out: list[dict] = []
+    for section in sections:
+        row = defaults.get(section.id)
+        plan = db.get(FeePlan, row.fee_plan_id) if row and row.fee_plan_id else None
+        out.append(
+            {
+                "sectionId": section.id,
+                "className": section.class_name,
+                "sectionName": section.name,
+                "amountPaise": row.amount_paise if row else 0,
+                "feePlanId": row.fee_plan_id if row else None,
+                "feePlan": plan_to_dict(plan) if plan else None,
+            }
+        )
+    return out
+
+
+def get_section_fee_ledger(db: Session, institute_id: str, user_id: str, section_id: str) -> dict:
+    member = require_membership(db, institute_id, user_id)
+    if member.role not in {"owner", "admin", "principal", "accountant"}:
+        raise PermissionError("Fee ledger requires finance staff role")
+    _get_section(db, institute_id, section_id)
+    section_default = get_section_fee_default(db, institute_id, user_id, section_id)
+
+    student_ids = list(
+        db.scalars(
+            select(SectionMember.user_id).where(
+                SectionMember.section_id == section_id,
+                SectionMember.member_type == "student",
+            )
+        )
+    )
+    students_out: list[dict] = []
+    for student_id in student_ids:
+        fees = list(
+            db.scalars(
+                select(StudentFee).where(
+                    StudentFee.institute_id == institute_id,
+                    StudentFee.student_id == student_id,
+                )
+            )
+        )
+        fee_lines = [enrich_due_row(db, fee) for fee in fees]
+        balance = sum(line["balancePaise"] for line in fee_lines)
+        paid_total = sum(line["paidPaise"] for line in fee_lines)
+        billed_total = sum(line["amountPaise"] for line in fee_lines)
+        payments = list(
+            db.scalars(
+                select(Payment)
+                .where(Payment.institute_id == institute_id, Payment.student_id == student_id)
+                .order_by(Payment.created_at.desc())
+                .limit(25)
+            )
+        )
+        students_out.append(
+            {
+                "studentId": student_id,
+                "billedPaise": billed_total,
+                "paidPaise": paid_total,
+                "balancePaise": balance,
+                "fees": fee_lines,
+                "payments": [payment_summary(p) for p in payments],
+                "status": "paid" if balance == 0 and billed_total > 0 else "due" if balance > 0 else "unassigned",
+            }
+        )
+
+    return {
+        "sectionId": section_id,
+        "sectionDefault": section_default,
+        "students": students_out,
     }

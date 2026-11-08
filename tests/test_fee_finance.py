@@ -94,3 +94,13 @@ def test_institute_expense(client: TestClient, db: Session):
     items = client.get(f"/v1/institutes/{institute_id}/finance/expenses?category=institute")
     assert items.status_code == 200
     assert len(items.json()) == 1
+
+
+def test_section_fee_ledger_empty(client: TestClient, db: Session):
+    institute_id, section_id = seed(db)
+    overview = client.get(f"/v1/institutes/{institute_id}/section-fee-defaults")
+    assert overview.status_code == 200
+    assert len(overview.json()) == 1
+    ledger = client.get(f"/v1/institutes/{institute_id}/sections/{section_id}/fees/ledger")
+    assert ledger.status_code == 200
+    assert ledger.json()["students"] == []
