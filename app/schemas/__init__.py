@@ -1298,6 +1298,7 @@ class FeePlanCreate(BaseModel):
     installmentCount: int = Field(default=1, ge=1, le=24)
     discountPercent: int = Field(default=0, ge=0, le=100)
     lateFeePaise: int = Field(default=0, ge=0)
+    dueScheduleNotes: str = Field(default="", max_length=500)
 
 
 class FeePlanUpdate(BaseModel):
@@ -1305,6 +1306,7 @@ class FeePlanUpdate(BaseModel):
     installmentCount: int | None = Field(default=None, ge=1, le=24)
     discountPercent: int | None = Field(default=None, ge=0, le=100)
     lateFeePaise: int | None = Field(default=None, ge=0)
+    dueScheduleNotes: str | None = Field(default=None, max_length=500)
 
 
 class FeePlanOut(BaseModel):
@@ -1314,6 +1316,7 @@ class FeePlanOut(BaseModel):
     installmentCount: int
     discountPercent: int
     lateFeePaise: int
+    dueScheduleNotes: str = ""
 
 
 class SectionFeeDefaultOut(BaseModel):
