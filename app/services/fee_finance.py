@@ -25,7 +25,12 @@ def effective_amount_paise(base_paise: int, plan: FeePlan | None) -> int:
     return int(base_paise * (100 - plan.discount_percent) / 100)
 
 
-def plan_to_dict(plan: FeePlan) -> dict:
+def plan_to_dict(plan: FeePlan, section: Section | None = None) -> dict:
+    applies = "All classes"
+    if section:
+        applies = f"{section.class_name} · {section.name}"
+    elif plan.section_id and not section:
+        applies = "One class"
     return {
         "id": plan.id,
         "instituteId": plan.institute_id,
@@ -34,16 +39,37 @@ def plan_to_dict(plan: FeePlan) -> dict:
         "discountPercent": plan.discount_percent,
         "lateFeePaise": plan.late_fee_paise,
         "dueScheduleNotes": plan.due_schedule_notes or "",
+        "sectionId": plan.section_id,
+        "appliesToLabel": applies,
     }
 
 
-def list_fee_plans(db: Session, institute_id: str, user_id: str) -> list[FeePlan]:
+def _plan_name_taken(
+    db: Session, institute_id: str, name: str, section_id: str | None, exclude_plan_id: str | None = None
+) -> bool:
+    q = select(FeePlan).where(FeePlan.institute_id == institute_id, FeePlan.name == name.strip())
+    if section_id:
+        q = q.where(FeePlan.section_id == section_id)
+    else:
+        q = q.where(FeePlan.section_id.is_(None))
+    if exclude_plan_id:
+        q = q.where(FeePlan.id != exclude_plan_id)
+    return db.scalar(q) is not None
+
+
+def list_fee_plans(db: Session, institute_id: str, user_id: str) -> list[dict]:
     require_membership(db, institute_id, user_id)
-    return list(
+    rows = list(
         db.scalars(
             select(FeePlan).where(FeePlan.institute_id == institute_id).order_by(FeePlan.name)
         )
     )
+    section_ids = {p.section_id for p in rows if p.section_id}
+    sections = {}
+    if section_ids:
+        for sec in db.scalars(select(Section).where(Section.id.in_(section_ids))):
+            sections[sec.id] = sec
+    return [plan_to_dict(p, sections.get(p.section_id) if p.section_id else None) for p in rows]
 
 
 def create_fee_plan(
@@ -55,19 +81,26 @@ def create_fee_plan(
     discount_percent: int,
     late_fee_paise: int,
     due_schedule_notes: str = "",
+    section_id: str | None = None,
 ) -> FeePlan:
     _require_fee_manage(db, institute_id, user_id)
     if installment_count < 1:
         raise ValueError("installmentCount must be at least 1")
     if not 0 <= discount_percent <= 100:
         raise ValueError("discountPercent must be 0–100")
+    if section_id:
+        _get_section(db, institute_id, section_id)
+    clean_name = name.strip()
+    if _plan_name_taken(db, institute_id, clean_name, section_id):
+        raise ValueError("A plan with this name already exists for the same class scope")
     row = FeePlan(
         institute_id=institute_id,
-        name=name.strip(),
+        name=clean_name,
         installment_count=installment_count,
         discount_percent=discount_percent,
         late_fee_paise=max(late_fee_paise, 0),
         due_schedule_notes=(due_schedule_notes or "").strip()[:500],
+        section_id=section_id,
     )
     db.add(row)
     db.commit()
