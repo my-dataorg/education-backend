@@ -67,6 +67,7 @@ def assign_student_fee(
     amount_paise: int | None,
     fee_plan_id: str | None = None,
     section_id: str | None = None,
+    payment_notes: str = "",
 ) -> StudentFee:
     _require_fee_manage(db, institute_id, user_id)
     structure = db.get(FeeStructure, fee_structure_id)
@@ -86,6 +87,8 @@ def assign_student_fee(
             existing.fee_plan_id = fee_plan_id
         if section_id is not None:
             existing.section_id = section_id
+        if payment_notes:
+            existing.payment_notes = payment_notes.strip()[:500]
         db.commit()
         db.refresh(existing)
         return existing
@@ -96,6 +99,7 @@ def assign_student_fee(
         amount_paise=billed,
         fee_plan_id=fee_plan_id,
         section_id=section_id,
+        payment_notes=payment_notes.strip()[:500],
     )
     db.add(row)
     db.commit()

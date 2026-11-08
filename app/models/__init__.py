@@ -198,6 +198,7 @@ class StudentFee(Base):
     paid_paise: Mapped[int] = mapped_column(Integer, default=0)
     fee_plan_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("fee_plans.id"), nullable=True)
     section_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("sections.id"), nullable=True)
+    payment_notes: Mapped[str] = mapped_column(String(500), default="")
 
 
 class SectionFeeDefault(Base):
@@ -210,6 +211,52 @@ class SectionFeeDefault(Base):
     fee_structure_id: Mapped[str | None] = mapped_column(
         String(36), ForeignKey("fee_structures.id"), nullable=True
     )
+
+
+class InstituteFeeDefault(Base):
+    __tablename__ = "institute_fee_defaults"
+
+    institute_id: Mapped[str] = mapped_column(String(36), ForeignKey("institutes.id"), primary_key=True)
+    amount_paise: Mapped[int] = mapped_column(Integer, default=0)
+    fee_plan_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("fee_plans.id"), nullable=True)
+    fee_structure_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("fee_structures.id"), nullable=True
+    )
+
+
+class ClassFeeDefault(Base):
+    __tablename__ = "class_fee_defaults"
+    __table_args__ = (UniqueConstraint("institute_id", "class_name"),)
+
+    institute_id: Mapped[str] = mapped_column(String(36), ForeignKey("institutes.id"), primary_key=True)
+    class_name: Mapped[str] = mapped_column(String(200), primary_key=True)
+    amount_paise: Mapped[int] = mapped_column(Integer, default=0)
+    fee_plan_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("fee_plans.id"), nullable=True)
+    fee_structure_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("fee_structures.id"), nullable=True
+    )
+
+
+class FeePlanInstallment(Base):
+    __tablename__ = "fee_plan_installments"
+    __table_args__ = (UniqueConstraint("fee_plan_id", "sequence"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    fee_plan_id: Mapped[str] = mapped_column(String(36), ForeignKey("fee_plans.id"))
+    sequence: Mapped[int] = mapped_column(Integer)
+    due_date: Mapped[date] = mapped_column(Date)
+    amount_paise: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class StudentFeeInstallment(Base):
+    __tablename__ = "student_fee_installments"
+    __table_args__ = (UniqueConstraint("student_fee_id", "sequence"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    student_fee_id: Mapped[str] = mapped_column(String(36), ForeignKey("student_fees.id"))
+    sequence: Mapped[int] = mapped_column(Integer)
+    due_date: Mapped[date] = mapped_column(Date)
+    amount_paise: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class InstituteExpense(Base):

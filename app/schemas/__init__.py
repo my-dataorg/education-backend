@@ -1270,12 +1270,26 @@ class FeeStructureOut(BaseModel):
     amountPaise: int
 
 
+class FeeInstallmentIn(BaseModel):
+    sequence: int | None = None
+    dueDate: date
+    amountPaise: int | None = None
+
+
+class FeeInstallmentOut(BaseModel):
+    sequence: int
+    dueDate: str
+    amountPaise: int | None = None
+
+
 class StudentFeeAssign(BaseModel):
     studentId: str
     feeStructureId: str
     amountPaise: int | None = None
     feePlanId: str | None = None
     sectionId: str | None = None
+    paymentNotes: str = ""
+    installments: list[FeeInstallmentIn] = Field(default_factory=list)
 
 
 class StudentFeeDueOut(BaseModel):
@@ -1300,6 +1314,7 @@ class FeePlanCreate(BaseModel):
     lateFeePaise: int = Field(default=0, ge=0)
     dueScheduleNotes: str = Field(default="", max_length=500)
     sectionId: str | None = None
+    installments: list[FeeInstallmentIn] = Field(default_factory=list)
 
 
 class FeePlanUpdate(BaseModel):
@@ -1320,6 +1335,22 @@ class FeePlanOut(BaseModel):
     dueScheduleNotes: str = ""
     sectionId: str | None = None
     appliesToLabel: str = "All classes"
+    installments: list[FeeInstallmentOut] = Field(default_factory=list)
+
+
+class FeeLadderDefaultPut(BaseModel):
+    amountPaise: int = Field(ge=0)
+    feePlanId: str | None = None
+    feeStructureId: str | None = None
+
+
+class FeeLadderDefaultOut(BaseModel):
+    instituteId: str | None = None
+    className: str | None = None
+    amountPaise: int
+    feePlanId: str | None = None
+    feeStructureId: str | None = None
+    feePlan: FeePlanOut | None = None
 
 
 class SectionFeeDefaultOut(BaseModel):
@@ -1377,6 +1408,11 @@ class SectionFeeLedgerStudentOut(BaseModel):
     status: str
     fees: list[StudentFeeDueOut]
     payments: list[FeePaymentSummaryOut]
+    resolvedFrom: str = "none"
+    resolvedFromLabel: str = "Not set"
+    resolvedAmountPaise: int = 0
+    installments: list[FeeInstallmentOut] = Field(default_factory=list)
+    nextDueDate: str | None = None
 
 
 class SectionFeeLedgerOut(BaseModel):

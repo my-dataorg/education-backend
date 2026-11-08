@@ -6,14 +6,18 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import (
+    ClassFeeDefault,
     FeePlan,
+    FeePlanInstallment,
     FeeStructure,
     InstituteExpense,
+    InstituteFeeDefault,
     Payment,
     Section,
     SectionFeeDefault,
     SectionMember,
     StudentFee,
+    StudentFeeInstallment,
 )
 from app.services.fees import _require_fee_manage, assign_student_fee, ensure_default_fee_structure
 from app.services.institutes import require_membership
@@ -25,12 +29,33 @@ def effective_amount_paise(base_paise: int, plan: FeePlan | None) -> int:
     return int(base_paise * (100 - plan.discount_percent) / 100)
 
 
-def plan_to_dict(plan: FeePlan, section: Section | None = None) -> dict:
+def installment_rows_to_dict(rows: list[FeePlanInstallment]) -> list[dict]:
+    return [
+        {
+            "sequence": r.sequence,
+            "dueDate": r.due_date.isoformat(),
+            "amountPaise": r.amount_paise,
+        }
+        for r in rows
+    ]
+
+
+def plan_to_dict(plan: FeePlan, section: Section | None = None, db: Session | None = None) -> dict:
     applies = "All classes"
     if section:
         applies = f"{section.class_name} · {section.name}"
     elif plan.section_id and not section:
         applies = "One class"
+    installments: list[dict] = []
+    if db:
+        inst_rows = list(
+            db.scalars(
+                select(FeePlanInstallment)
+                .where(FeePlanInstallment.fee_plan_id == plan.id)
+                .order_by(FeePlanInstallment.sequence)
+            )
+        )
+        installments = installment_rows_to_dict(inst_rows)
     return {
         "id": plan.id,
         "instituteId": plan.institute_id,
@@ -41,6 +66,7 @@ def plan_to_dict(plan: FeePlan, section: Section | None = None) -> dict:
         "dueScheduleNotes": plan.due_schedule_notes or "",
         "sectionId": plan.section_id,
         "appliesToLabel": applies,
+        "installments": installments,
     }
 
 
@@ -69,7 +95,10 @@ def list_fee_plans(db: Session, institute_id: str, user_id: str) -> list[dict]:
     if section_ids:
         for sec in db.scalars(select(Section).where(Section.id.in_(section_ids))):
             sections[sec.id] = sec
-    return [plan_to_dict(p, sections.get(p.section_id) if p.section_id else None) for p in rows]
+    return [
+        plan_to_dict(p, sections.get(p.section_id) if p.section_id else None, db)
+        for p in rows
+    ]
 
 
 def create_fee_plan(
@@ -82,6 +111,7 @@ def create_fee_plan(
     late_fee_paise: int,
     due_schedule_notes: str = "",
     section_id: str | None = None,
+    installments: list[dict] | None = None,
 ) -> FeePlan:
     _require_fee_manage(db, institute_id, user_id)
     if installment_count < 1:
@@ -105,7 +135,198 @@ def create_fee_plan(
     db.add(row)
     db.commit()
     db.refresh(row)
+    if installments is not None:
+        replace_plan_installments(db, row.id, installments)
     return row
+
+
+def replace_plan_installments(db: Session, plan_id: str, installments: list[dict]) -> None:
+    for old in db.scalars(select(FeePlanInstallment).where(FeePlanInstallment.fee_plan_id == plan_id)):
+        db.delete(old)
+    for idx, item in enumerate(installments, start=1):
+        due = item.get("dueDate") or item.get("due_date")
+        if not due:
+            continue
+        if isinstance(due, str):
+            from datetime import date as date_type
+
+            due_date = date_type.fromisoformat(due)
+        else:
+            due_date = due
+        seq = int(item.get("sequence") or idx)
+        amt = item.get("amountPaise")
+        if amt is None:
+            amt = item.get("amount_paise")
+        db.add(
+            FeePlanInstallment(
+                fee_plan_id=plan_id,
+                sequence=seq,
+                due_date=due_date,
+                amount_paise=amt,
+            )
+        )
+    db.commit()
+
+
+def replace_student_fee_installments(db: Session, student_fee_id: str, installments: list[dict]) -> None:
+    for old in db.scalars(
+        select(StudentFeeInstallment).where(StudentFeeInstallment.student_fee_id == student_fee_id)
+    ):
+        db.delete(old)
+    for idx, item in enumerate(installments, start=1):
+        due = item.get("dueDate") or item.get("due_date")
+        if not due:
+            continue
+        from datetime import date as date_type
+
+        due_date = date_type.fromisoformat(due) if isinstance(due, str) else due
+        seq = int(item.get("sequence") or idx)
+        amt = item.get("amountPaise")
+        if amt is None:
+            amt = item.get("amount_paise")
+        db.add(
+            StudentFeeInstallment(
+                student_fee_id=student_fee_id,
+                sequence=seq,
+                due_date=due_date,
+                amount_paise=amt,
+            )
+        )
+    db.commit()
+
+
+def default_layer_to_dict(
+    amount_paise: int,
+    fee_plan_id: str | None,
+    fee_structure_id: str | None,
+    fee_plan: FeePlan | None,
+    db: Session,
+    *,
+    class_name: str | None = None,
+    institute_id: str | None = None,
+) -> dict:
+    out = {
+        "amountPaise": amount_paise,
+        "feePlanId": fee_plan_id,
+        "feeStructureId": fee_structure_id,
+        "feePlan": plan_to_dict(fee_plan, db=db) if fee_plan else None,
+    }
+    if class_name is not None:
+        out["className"] = class_name
+    if institute_id is not None:
+        out["instituteId"] = institute_id
+    return out
+
+
+def get_institute_fee_default(db: Session, institute_id: str, user_id: str) -> dict:
+    require_membership(db, institute_id, user_id)
+    row = db.get(InstituteFeeDefault, institute_id)
+    if not row:
+        return default_layer_to_dict(0, None, None, None, db, institute_id=institute_id)
+    plan = db.get(FeePlan, row.fee_plan_id) if row.fee_plan_id else None
+    return default_layer_to_dict(row.amount_paise, row.fee_plan_id, row.fee_structure_id, plan, db, institute_id=institute_id)
+
+
+def put_institute_fee_default(
+    db: Session,
+    institute_id: str,
+    user_id: str,
+    amount_paise: int,
+    fee_plan_id: str | None,
+    fee_structure_id: str | None,
+) -> dict:
+    _require_fee_manage(db, institute_id, user_id)
+    if amount_paise < 0:
+        raise ValueError("amountPaise must be non-negative")
+    row = db.get(InstituteFeeDefault, institute_id)
+    structure_id = fee_structure_id
+    if structure_id:
+        structure_id = _resolve_fee_structure_id(db, institute_id, user_id, fee_structure_id)
+    if row:
+        row.amount_paise = amount_paise
+        row.fee_plan_id = fee_plan_id
+        if structure_id:
+            row.fee_structure_id = structure_id
+    else:
+        if not structure_id:
+            structure_id = _resolve_fee_structure_id(db, institute_id, user_id, None)
+        row = InstituteFeeDefault(
+            institute_id=institute_id,
+            amount_paise=amount_paise,
+            fee_plan_id=fee_plan_id,
+            fee_structure_id=structure_id,
+        )
+        db.add(row)
+    db.commit()
+    return get_institute_fee_default(db, institute_id, user_id)
+
+
+def list_class_fee_defaults(db: Session, institute_id: str, user_id: str) -> list[dict]:
+    _require_fee_manage(db, institute_id, user_id)
+    class_names = db.scalars(
+        select(Section.class_name)
+        .where(Section.institute_id == institute_id, Section.class_name != "")
+        .distinct()
+        .order_by(Section.class_name)
+    ).all()
+    rows = {
+        (r.institute_id, r.class_name): r
+        for r in db.scalars(select(ClassFeeDefault).where(ClassFeeDefault.institute_id == institute_id))
+    }
+    out: list[dict] = []
+    for class_name in class_names:
+        if not class_name:
+            continue
+        row = rows.get((institute_id, class_name))
+        plan = db.get(FeePlan, row.fee_plan_id) if row and row.fee_plan_id else None
+        out.append(
+            default_layer_to_dict(
+                row.amount_paise if row else 0,
+                row.fee_plan_id if row else None,
+                row.fee_structure_id if row else None,
+                plan,
+                db,
+                class_name=class_name,
+            )
+        )
+    return out
+
+
+def put_class_fee_default(
+    db: Session,
+    institute_id: str,
+    user_id: str,
+    class_name: str,
+    amount_paise: int,
+    fee_plan_id: str | None,
+    fee_structure_id: str | None,
+) -> dict:
+    _require_fee_manage(db, institute_id, user_id)
+    if amount_paise < 0:
+        raise ValueError("amountPaise must be non-negative")
+    structure_id = fee_structure_id
+    if structure_id:
+        structure_id = _resolve_fee_structure_id(db, institute_id, user_id, fee_structure_id)
+    row = db.get(ClassFeeDefault, (institute_id, class_name))
+    if row:
+        row.amount_paise = amount_paise
+        row.fee_plan_id = fee_plan_id
+        if structure_id:
+            row.fee_structure_id = structure_id
+    else:
+        if not structure_id:
+            structure_id = _resolve_fee_structure_id(db, institute_id, user_id, None)
+        row = ClassFeeDefault(
+            institute_id=institute_id,
+            class_name=class_name,
+            amount_paise=amount_paise,
+            fee_plan_id=fee_plan_id,
+            fee_structure_id=structure_id,
+        )
+        db.add(row)
+    db.commit()
+    plan = db.get(FeePlan, row.fee_plan_id) if row.fee_plan_id else None
+    return default_layer_to_dict(row.amount_paise, row.fee_plan_id, row.fee_structure_id, plan, db, class_name=class_name)
 
 
 def update_fee_plan(
@@ -419,6 +640,8 @@ def get_section_fee_ledger(db: Session, institute_id: str, user_id: str, section
             )
         )
     )
+    from app.services.fee_resolution import resolve_standard_fee, resolved_from_label
+
     students_out: list[dict] = []
     for student_id in student_ids:
         fees = list(
@@ -433,6 +656,7 @@ def get_section_fee_ledger(db: Session, institute_id: str, user_id: str, section
         balance = sum(line["balancePaise"] for line in fee_lines)
         paid_total = sum(line["paidPaise"] for line in fee_lines)
         billed_total = sum(line["amountPaise"] for line in fee_lines)
+        resolved = resolve_standard_fee(db, institute_id, section_id, student_id)
         payments = list(
             db.scalars(
                 select(Payment)
@@ -444,12 +668,17 @@ def get_section_fee_ledger(db: Session, institute_id: str, user_id: str, section
         students_out.append(
             {
                 "studentId": student_id,
-                "billedPaise": billed_total,
+                "billedPaise": billed_total or resolved["amountPaise"],
                 "paidPaise": paid_total,
-                "balancePaise": balance,
+                "balancePaise": balance if billed_total else resolved["amountPaise"],
                 "fees": fee_lines,
                 "payments": [payment_summary(p) for p in payments],
                 "status": "paid" if balance == 0 and billed_total > 0 else "due" if balance > 0 else "unassigned",
+                "resolvedFrom": resolved["resolvedFrom"],
+                "resolvedFromLabel": resolved_from_label(resolved["resolvedFrom"]),
+                "resolvedAmountPaise": resolved["amountPaise"],
+                "installments": resolved["installments"],
+                "nextDueDate": resolved["nextDueDate"],
             }
         )
 
