@@ -3930,6 +3930,7 @@ def create_fee_plan(
             body.installmentCount,
             body.discountPercent,
             body.lateFeePaise,
+            body.dueScheduleNotes,
         )
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
@@ -3956,6 +3957,7 @@ def update_fee_plan(
             installment_count=body.installmentCount,
             discount_percent=body.discountPercent,
             late_fee_paise=body.lateFeePaise,
+            due_schedule_notes=body.dueScheduleNotes,
         )
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e

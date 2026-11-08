@@ -60,10 +60,13 @@ def test_fee_plan_and_section_default(client: TestClient, db: Session):
             "installmentCount": 3,
             "discountPercent": 0,
             "lateFeePaise": 50000,
+            "dueScheduleNotes": "1 Apr, 1 Jul, 1 Oct",
         },
     )
     assert plan.status_code == 201
-    plan_id = plan.json()["id"]
+    body = plan.json()
+    plan_id = body["id"]
+    assert body["dueScheduleNotes"] == "1 Apr, 1 Jul, 1 Oct"
 
     put = client.put(
         f"/v1/institutes/{institute_id}/sections/{section_id}/fee-default",

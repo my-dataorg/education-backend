@@ -181,6 +181,7 @@ class FeePlan(Base):
     installment_count: Mapped[int] = mapped_column(Integer, default=1)
     discount_percent: Mapped[int] = mapped_column(Integer, default=0)
     late_fee_paise: Mapped[int] = mapped_column(Integer, default=0)
+    due_schedule_notes: Mapped[str] = mapped_column(String(500), default="")
 
 
 class StudentFee(Base):

@@ -24,6 +24,7 @@ def plan_to_dict(plan: FeePlan) -> dict:
         "installmentCount": plan.installment_count,
         "discountPercent": plan.discount_percent,
         "lateFeePaise": plan.late_fee_paise,
+        "dueScheduleNotes": plan.due_schedule_notes or "",
     }
 
 
@@ -44,6 +45,7 @@ def create_fee_plan(
     installment_count: int,
     discount_percent: int,
     late_fee_paise: int,
+    due_schedule_notes: str = "",
 ) -> FeePlan:
     _require_fee_manage(db, institute_id, user_id)
     if installment_count < 1:
@@ -56,6 +58,7 @@ def create_fee_plan(
         installment_count=installment_count,
         discount_percent=discount_percent,
         late_fee_paise=max(late_fee_paise, 0),
+        due_schedule_notes=(due_schedule_notes or "").strip()[:500],
     )
     db.add(row)
     db.commit()
@@ -73,6 +76,7 @@ def update_fee_plan(
     installment_count: int | None,
     discount_percent: int | None,
     late_fee_paise: int | None,
+    due_schedule_notes: str | None = None,
 ) -> FeePlan:
     _require_fee_manage(db, institute_id, user_id)
     row = db.get(FeePlan, plan_id)
@@ -90,6 +94,8 @@ def update_fee_plan(
         row.discount_percent = discount_percent
     if late_fee_paise is not None:
         row.late_fee_paise = max(late_fee_paise, 0)
+    if due_schedule_notes is not None:
+        row.due_schedule_notes = due_schedule_notes.strip()[:500]
     db.commit()
     db.refresh(row)
     return row
