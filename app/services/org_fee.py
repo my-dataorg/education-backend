@@ -23,11 +23,11 @@ from app.services.fees import _require_fee_manage
 from app.services.institutes import require_membership
 
 DEFAULT_LABELS: list[dict[str, Any]] = [
-    {"level": 1, "label": "School level", "enabled": False},
+    {"level": 1, "label": "School band", "enabled": True},
     {"level": 2, "label": "Class", "enabled": True},
     {"level": 3, "label": "Section", "enabled": True},
-    {"level": 4, "label": "Sub-section", "enabled": False},
-    {"level": 5, "label": "Student", "enabled": True},
+    {"level": 4, "label": "Sub-section", "enabled": True},
+    {"level": 5, "label": "Student", "enabled": False},
 ]
 
 
@@ -41,7 +41,7 @@ def ensure_org_config(db: Session, institute_id: str) -> InstituteOrgConfig:
         return row
     row = InstituteOrgConfig(
         institute_id=institute_id,
-        enabled_depth=3,
+        enabled_depth=4,
         level_labels_json=_default_labels_json(),
     )
     db.add(row)
@@ -89,19 +89,25 @@ def _find_root(db: Session, institute_id: str) -> OrgNode | None:
     )
 
 
-def _find_or_create_class_node(db: Session, institute_id: str, root_id: str, class_name: str) -> OrgNode:
+def _find_or_create_class_node(
+    db: Session, institute_id: str, parent_id: str, class_name: str, class_org_node_id: str | None = None
+) -> OrgNode:
+    if class_org_node_id:
+        linked = db.get(OrgNode, class_org_node_id)
+        if linked and linked.institute_id == institute_id and linked.level == 2:
+            return linked
     label = (class_name or "Unassigned").strip() or "Unassigned"
     existing = db.scalar(
         select(OrgNode).where(
             OrgNode.institute_id == institute_id,
-            OrgNode.parent_id == root_id,
+            OrgNode.parent_id == parent_id,
             OrgNode.level == 2,
             OrgNode.label == label,
         )
     )
     if existing:
         return existing
-    node = OrgNode(institute_id=institute_id, parent_id=root_id, level=2, label=label)
+    node = OrgNode(institute_id=institute_id, parent_id=parent_id, level=2, label=label)
     db.add(node)
     db.flush()
     return node
@@ -131,7 +137,17 @@ def sync_org_tree(db: Session, institute_id: str) -> None:
 
     sections = list(db.scalars(select(Section).where(Section.institute_id == institute_id)))
     for section in sections:
-        class_node = _find_or_create_class_node(db, institute_id, root.id, section.class_name or "")
+        class_parent = root.id
+        if section.class_org_node_id:
+            band_parent = db.get(OrgNode, section.class_org_node_id)
+            if band_parent and band_parent.level == 2:
+                class_node = band_parent
+            else:
+                class_node = _find_or_create_class_node(
+                    db, institute_id, class_parent, section.class_name or "", section.class_org_node_id
+                )
+        else:
+            class_node = _find_or_create_class_node(db, institute_id, class_parent, section.class_name or "")
         sec_node = _find_section_node(db, institute_id, section.id)
         if not sec_node:
             sec_node = OrgNode(
@@ -143,6 +159,8 @@ def sync_org_tree(db: Session, institute_id: str) -> None:
             )
             db.add(sec_node)
             db.flush()
+        elif sec_node.parent_id != class_node.id:
+            sec_node.parent_id = class_node.id
 
         student_ids = list(
             db.scalars(
@@ -283,6 +301,23 @@ def list_org_nodes_flat(db: Session, institute_id: str, user_id: str) -> list[di
     return [node_to_dict(n) for n in rows]
 
 
+def _validate_org_parent(db: Session, institute_id: str, parent_id: str | None, level: int) -> None:
+    if level == 1:
+        root = _find_root(db, institute_id)
+        if not root or parent_id != root.id:
+            raise ValueError("School band must hang under the institute root")
+        return
+    if not parent_id:
+        raise ValueError("parentId required")
+    parent = db.get(OrgNode, parent_id)
+    if not parent or parent.institute_id != institute_id:
+        raise ValueError("Parent node not found")
+    if level == 2 and parent.level not in {0, 1}:
+        raise ValueError("Class must be under a school band or institute root")
+    if level == 4 and parent.level != 3:
+        raise ValueError("Sub-section must be under a section")
+
+
 def create_org_node(
     db: Session,
     institute_id: str,
@@ -290,14 +325,24 @@ def create_org_node(
     parent_id: str | None,
     level: int,
     label: str,
+    *,
+    academic: bool = False,
 ) -> dict:
-    _require_fee_manage(db, institute_id, user_id)
-    if parent_id:
-        parent = db.get(OrgNode, parent_id)
-        if not parent or parent.institute_id != institute_id:
-            raise ValueError("Parent node not found")
-    if level not in {1, 4}:
-        raise ValueError("Manual nodes allowed at level 1 (school band) or 4 (sub-section)")
+    if academic:
+        from app.services.institutes import require_owner
+
+        require_owner(db, institute_id, user_id)
+    else:
+        _require_fee_manage(db, institute_id, user_id)
+    if level not in {1, 2, 4}:
+        raise ValueError("Manual nodes allowed at levels 1 (band), 2 (class), or 4 (sub-section)")
+    if level == 1:
+        root = _find_root(db, institute_id)
+        if not root:
+            sync_org_tree(db, institute_id)
+            root = _find_root(db, institute_id)
+        parent_id = root.id if root else parent_id
+    _validate_org_parent(db, institute_id, parent_id, level)
     node = OrgNode(
         institute_id=institute_id,
         parent_id=parent_id,

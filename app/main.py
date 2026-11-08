@@ -124,6 +124,11 @@ from app.schemas import (
     OrgNodeFeeDefaultOut,
     OrgNodeFeeDefaultPut,
     StudentFeesDetailOut,
+    AcademicTreeOut,
+    AcademicTreeNodeOut,
+    AcademicOrgNodeCreate,
+    AcademicSectionCreate,
+    AcademicSectionOut,
     InstituteExpenseCreate,
     InstituteExpenseOut,
     AttendanceSummaryOut,
@@ -399,6 +404,7 @@ from app.services import exams as exam_service
 from app.services import fees as fee_service
 from app.services import fee_finance as finance_service
 from app.services import org_fee as org_fee_service
+from app.services import academic_structure as academic_service
 from app.services.attendance_summary import get_attendance_summary
 from app.services import distribution_lists as dl_service
 from app.services import notices as notice_service
@@ -4219,6 +4225,89 @@ def read_student_fees_detail(
         raise HTTPException(status_code=404, detail=str(e)) from e
     plan = data.pop("feePlan", None)
     return StudentFeesDetailOut(**data, feePlan=FeePlanOut(**plan) if plan else None)
+
+
+@app.get("/v1/institutes/{institute_id}/academic-structure/tree", response_model=AcademicTreeOut)
+def read_academic_structure_tree(
+    institute_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        data = academic_service.get_academic_tree(db, institute_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    return AcademicTreeOut(
+        config=InstituteOrgConfigOut(**data["config"]),
+        tree=[AcademicTreeNodeOut(**n) for n in data["tree"]],
+    )
+
+
+@app.post("/v1/institutes/{institute_id}/academic-structure/nodes", response_model=OrgNodeOut, status_code=201)
+def create_academic_structure_node(
+    institute_id: str,
+    body: AcademicOrgNodeCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        row = academic_service.create_academic_node(
+            db, institute_id, user["id"], body.parentId, body.level, body.label
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return OrgNodeOut(**row)
+
+
+@app.post(
+    "/v1/institutes/{institute_id}/academic-structure/sections",
+    response_model=AcademicSectionOut,
+    status_code=201,
+)
+def create_academic_section(
+    institute_id: str,
+    body: AcademicSectionCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        row = academic_service.create_section_under_class(
+            db,
+            institute_id,
+            user["id"],
+            body.parentClassOrgNodeId,
+            body.name,
+            body.branchId,
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return AcademicSectionOut(**row)
+
+
+@app.put("/v1/institutes/{institute_id}/academic-structure/org-config", response_model=InstituteOrgConfigOut)
+def write_academic_org_config(
+    institute_id: str,
+    body: InstituteOrgConfigPut,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        data = academic_service.put_academic_org_config(
+            db,
+            institute_id,
+            user["id"],
+            body.enabledDepth,
+            [l.model_dump() for l in body.levelLabels],
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return InstituteOrgConfigOut(**data)
 
 
 @app.get("/v1/institutes/{institute_id}/org-config", response_model=InstituteOrgConfigOut)

@@ -1377,6 +1377,42 @@ class OrgNodeCreate(BaseModel):
     label: str = Field(min_length=1, max_length=200)
 
 
+class AcademicTreeNodeOut(BaseModel):
+    id: str
+    instituteId: str
+    parentId: str | None = None
+    level: int
+    label: str
+    sectionId: str | None = None
+    studentUserId: str | None = None
+    children: list["AcademicTreeNodeOut"] = Field(default_factory=list)
+
+
+class AcademicTreeOut(BaseModel):
+    config: InstituteOrgConfigOut
+    tree: list[AcademicTreeNodeOut]
+
+
+class AcademicOrgNodeCreate(BaseModel):
+    parentId: str | None = None
+    level: int = Field(ge=1, le=4)
+    label: str = Field(min_length=1, max_length=200)
+
+
+class AcademicSectionCreate(BaseModel):
+    parentClassOrgNodeId: str
+    name: str = Field(min_length=1, max_length=200)
+    branchId: str | None = None
+
+
+class AcademicSectionOut(BaseModel):
+    sectionId: str
+    name: str
+    className: str
+    classOrgNodeId: str | None = None
+    orgNodeId: str | None = None
+
+
 class OrgNodeFeeDefaultPut(BaseModel):
     amountPaise: int = Field(ge=0)
     feePlanId: str | None = None
@@ -1793,3 +1829,6 @@ class AssignmentGradeResponseIn(BaseModel):
 class AssignmentGradeIn(BaseModel):
     responses: list[AssignmentGradeResponseIn] = Field(default_factory=list)
     scoresVisible: bool = False
+
+
+AcademicTreeNodeOut.model_rebuild()

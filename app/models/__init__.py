@@ -363,6 +363,7 @@ class Section(Base):
     branch_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("branches.id"), nullable=True)
     name: Mapped[str] = mapped_column(String(200))
     class_name: Mapped[str] = mapped_column(String(200), default="")
+    class_org_node_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     class_teacher_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 

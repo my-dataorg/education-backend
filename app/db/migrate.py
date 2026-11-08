@@ -1181,6 +1181,8 @@ def migrate_fee_org_tree(engine: Engine) -> None:
                 ADD COLUMN IF NOT EXISTS rules_json TEXT NOT NULL DEFAULT '{}';
                 ALTER TABLE fee_structures
                 ADD COLUMN IF NOT EXISTS org_node_id VARCHAR(36);
+                ALTER TABLE sections
+                ADD COLUMN IF NOT EXISTS class_org_node_id VARCHAR(36);
                 """
             )
         )
