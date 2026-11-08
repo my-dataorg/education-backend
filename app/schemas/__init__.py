@@ -1299,6 +1299,7 @@ class FeePlanCreate(BaseModel):
     discountPercent: int = Field(default=0, ge=0, le=100)
     lateFeePaise: int = Field(default=0, ge=0)
     dueScheduleNotes: str = Field(default="", max_length=500)
+    sectionId: str | None = None
 
 
 class FeePlanUpdate(BaseModel):
@@ -1317,6 +1318,8 @@ class FeePlanOut(BaseModel):
     discountPercent: int
     lateFeePaise: int
     dueScheduleNotes: str = ""
+    sectionId: str | None = None
+    appliesToLabel: str = "All classes"
 
 
 class SectionFeeDefaultOut(BaseModel):

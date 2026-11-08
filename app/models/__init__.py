@@ -182,6 +182,7 @@ class FeePlan(Base):
     discount_percent: Mapped[int] = mapped_column(Integer, default=0)
     late_fee_paise: Mapped[int] = mapped_column(Integer, default=0)
     due_schedule_notes: Mapped[str] = mapped_column(String(500), default="")
+    section_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("sections.id"), nullable=True)
 
 
 class StudentFee(Base):

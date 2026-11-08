@@ -1141,6 +1141,8 @@ def migrate_fee_finance(engine: Engine) -> None:
                 ADD COLUMN IF NOT EXISTS due_schedule_notes VARCHAR(500) NOT NULL DEFAULT '';
                 ALTER TABLE section_fee_defaults
                 ADD COLUMN IF NOT EXISTS fee_structure_id VARCHAR(36) REFERENCES fee_structures(id);
+                ALTER TABLE fee_plans
+                ADD COLUMN IF NOT EXISTS section_id VARCHAR(36) REFERENCES sections(id);
                 """
             )
         )

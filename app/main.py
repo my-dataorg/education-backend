@@ -3911,7 +3911,7 @@ def list_fee_plans(
         rows = finance_service.list_fee_plans(db, institute_id, user["id"])
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
-    return [FeePlanOut(**finance_service.plan_to_dict(r)) for r in rows]
+    return [FeePlanOut(**r) for r in rows]
 
 
 @app.post("/v1/institutes/{institute_id}/fee-plans", response_model=FeePlanOut, status_code=201)
@@ -3931,12 +3931,14 @@ def create_fee_plan(
             body.discountPercent,
             body.lateFeePaise,
             body.dueScheduleNotes,
+            body.sectionId,
         )
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-    return FeePlanOut(**finance_service.plan_to_dict(row))
+    section = db.get(Section, row.section_id) if row.section_id else None
+    return FeePlanOut(**finance_service.plan_to_dict(row, section))
 
 
 @app.patch("/v1/institutes/{institute_id}/fee-plans/{plan_id}", response_model=FeePlanOut)
@@ -3963,7 +3965,8 @@ def update_fee_plan(
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
-    return FeePlanOut(**finance_service.plan_to_dict(row))
+    section = db.get(Section, row.section_id) if row.section_id else None
+    return FeePlanOut(**finance_service.plan_to_dict(row, section))
 
 
 @app.delete("/v1/institutes/{institute_id}/fee-plans/{plan_id}", status_code=204)
