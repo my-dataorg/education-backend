@@ -16,6 +16,7 @@ from app.models import (
     StudentFeeInstallment,
 )
 from app.services.fee_finance import effective_amount_paise, plan_to_dict
+from app.services.org_fee import resolve_from_org_tree
 
 
 def resolve_standard_fee(
@@ -55,30 +56,44 @@ def resolve_standard_fee(
     fee_structure_id_resolved: str | None = None
     resolved_from = "none"
 
-    layer_amounts = [
-        ("student", student_fee.amount_paise if student_fee else 0, student_fee is not None),
-        ("section", section_row.amount_paise if section_row else 0, bool(section_row and section_row.amount_paise > 0)),
-        (
-            "class",
-            class_row.amount_paise if class_row else 0,
-            bool(class_row and class_row.amount_paise > 0),
-        ),
-        (
-            "institute",
-            institute_row.amount_paise if institute_row else 0,
-            bool(institute_row and institute_row.amount_paise > 0),
-        ),
-    ]
-    for name, amt, use in layer_amounts:
-        if not use:
-            continue
-        amount_paise = amt
-        resolved_from = name
-        break
+    org_hit = resolve_from_org_tree(db, institute_id, section_id, student_id)
+    org_node_id: str | None = None
+    org_node_label: str | None = None
+
+    if student_fee and (student_fee.amount_paise > 0 or student_fee.fee_plan_id):
+        amount_paise = student_fee.amount_paise
+        resolved_from = "student"
+    elif org_hit:
+        amount_paise = org_hit["amountPaise"]
+        resolved_from = org_hit["resolvedFrom"]
+        org_node_id = org_hit.get("orgNodeId")
+        org_node_label = org_hit.get("orgNodeLabel")
+    else:
+        layer_amounts = [
+            ("section", section_row.amount_paise if section_row else 0, bool(section_row and section_row.amount_paise > 0)),
+            (
+                "class",
+                class_row.amount_paise if class_row else 0,
+                bool(class_row and class_row.amount_paise > 0),
+            ),
+            (
+                "institute",
+                institute_row.amount_paise if institute_row else 0,
+                bool(institute_row and institute_row.amount_paise > 0),
+            ),
+        ]
+        for name, amt, use in layer_amounts:
+            if not use:
+                continue
+            amount_paise = amt
+            resolved_from = name
+            break
 
     def pick_plan_id() -> str | None:
         if student_fee and student_fee.fee_plan_id:
             return student_fee.fee_plan_id
+        if org_hit and org_hit.get("feePlanId"):
+            return org_hit["feePlanId"]
         if section_row and section_row.fee_plan_id:
             return section_row.fee_plan_id
         if class_row and class_row.fee_plan_id:
@@ -90,6 +105,8 @@ def resolve_standard_fee(
     def pick_structure_id() -> str | None:
         if student_fee and student_fee.fee_structure_id:
             return student_fee.fee_structure_id
+        if org_hit and org_hit.get("feeStructureId"):
+            return org_hit["feeStructureId"]
         if section_row and section_row.fee_structure_id:
             return section_row.fee_structure_id
         if class_row and class_row.fee_structure_id:
@@ -114,6 +131,8 @@ def resolve_standard_fee(
         "feePlanId": fee_plan_id,
         "feeStructureId": fee_structure_id_resolved,
         "resolvedFrom": resolved_from,
+        "orgNodeId": org_node_id,
+        "orgNodeLabel": org_node_label,
         "feePlan": plan_to_dict(plan) if plan else None,
         "installments": installments,
         "nextDueDate": next_due.isoformat() if next_due else None,
@@ -171,11 +190,14 @@ def _next_due_date(installments: list[dict]) -> date | None:
     return date.fromisoformat(installments[-1]["dueDate"]) if installments else None
 
 
-def resolved_from_label(code: str) -> str:
+def resolved_from_label(code: str, org_node_label: str | None = None) -> str:
+    if code == "org" and org_node_label:
+        return org_node_label
     return {
         "student": "Student",
         "section": "Section",
         "class": "Class",
         "institute": "Institute",
+        "org": org_node_label or "Organization",
         "none": "Not set",
     }.get(code, code)
