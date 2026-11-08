@@ -109,6 +109,10 @@ from app.schemas import (
     SectionFeeDefaultOut,
     SectionFeeDefaultPut,
     SectionFeeApply,
+    SectionFeeDefaultRowOut,
+    SectionFeeLedgerOut,
+    SectionFeeLedgerStudentOut,
+    FeePaymentSummaryOut,
     InstituteExpenseCreate,
     InstituteExpenseOut,
     AttendanceSummaryOut,
@@ -4016,6 +4020,50 @@ def write_section_fee_default(
         raise HTTPException(status_code=400, detail=str(e)) from e
     plan = data.pop("feePlan", None)
     return SectionFeeDefaultOut(**data, feePlan=FeePlanOut(**plan) if plan else None)
+
+
+@app.get(
+    "/v1/institutes/{institute_id}/section-fee-defaults",
+    response_model=list[SectionFeeDefaultRowOut],
+)
+def list_section_fee_defaults_overview(
+    institute_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        rows = finance_service.list_section_fee_defaults_overview(db, institute_id, user["id"])
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    return [SectionFeeDefaultRowOut(**r) for r in rows]
+
+
+@app.get(
+    "/v1/institutes/{institute_id}/sections/{section_id}/fees/ledger",
+    response_model=SectionFeeLedgerOut,
+)
+def read_section_fee_ledger(
+    institute_id: str,
+    section_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        data = finance_service.get_section_fee_ledger(db, institute_id, user["id"], section_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    default = data.pop("sectionDefault")
+    plan = default.pop("feePlan", None)
+    return SectionFeeLedgerOut(
+        sectionId=data["sectionId"],
+        sectionDefault=SectionFeeDefaultOut(
+            **default,
+            feePlan=FeePlanOut(**plan) if plan else None,
+        ),
+        students=[SectionFeeLedgerStudentOut(**s) for s in data["students"]],
+    )
 
 
 @app.post("/v1/institutes/{institute_id}/sections/{section_id}/fee-default/apply")
