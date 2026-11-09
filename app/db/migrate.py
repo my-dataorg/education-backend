@@ -1183,6 +1183,8 @@ def migrate_fee_org_tree(engine: Engine) -> None:
                 ADD COLUMN IF NOT EXISTS org_node_id VARCHAR(36);
                 ALTER TABLE sections
                 ADD COLUMN IF NOT EXISTS class_org_node_id VARCHAR(36);
+                ALTER TABLE org_nodes
+                ADD COLUMN IF NOT EXISTS description VARCHAR(500) NOT NULL DEFAULT '';
                 """
             )
         )

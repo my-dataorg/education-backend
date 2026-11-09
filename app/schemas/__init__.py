@@ -1345,13 +1345,14 @@ class FeePlanOut(BaseModel):
 
 
 class OrgLevelLabelIn(BaseModel):
-    level: int = Field(ge=1, le=5)
+    level: int = Field(ge=1, le=30)
     label: str = Field(min_length=1, max_length=80)
     enabled: bool = True
+    role: str = Field(default="org", max_length=16)
 
 
 class InstituteOrgConfigPut(BaseModel):
-    enabledDepth: int = Field(ge=3, le=5)
+    enabledDepth: int = Field(ge=3, le=20)
     levelLabels: list[OrgLevelLabelIn]
 
 
@@ -1367,6 +1368,7 @@ class OrgNodeOut(BaseModel):
     parentId: str | None = None
     level: int
     label: str
+    description: str = ""
     sectionId: str | None = None
     studentUserId: str | None = None
 
@@ -1383,6 +1385,7 @@ class AcademicTreeNodeOut(BaseModel):
     parentId: str | None = None
     level: int
     label: str
+    description: str = ""
     sectionId: str | None = None
     studentUserId: str | None = None
     children: list["AcademicTreeNodeOut"] = Field(default_factory=list)
@@ -1397,11 +1400,13 @@ class AcademicOrgNodeCreate(BaseModel):
     parentId: str | None = None
     level: int = Field(ge=1, le=4)
     label: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=500)
 
 
 class AcademicSectionCreate(BaseModel):
     parentClassOrgNodeId: str
     name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=500)
     branchId: str | None = None
 
 

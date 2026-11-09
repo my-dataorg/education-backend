@@ -22,13 +22,96 @@ from app.services.fee_finance import plan_to_dict
 from app.services.fees import _require_fee_manage
 from app.services.institutes import require_membership
 
+ORG_MIN_DEPTH = 3
+ORG_MAX_DEPTH = 20
+CLASS_ORG_LEVEL = 2
+SECTION_ORG_LEVEL = 3
+
 DEFAULT_LABELS: list[dict[str, Any]] = [
-    {"level": 1, "label": "School band", "enabled": True},
-    {"level": 2, "label": "Class", "enabled": True},
-    {"level": 3, "label": "Section", "enabled": True},
-    {"level": 4, "label": "Sub-section", "enabled": True},
-    {"level": 5, "label": "Student", "enabled": False},
+    {"level": 1, "label": "School band", "enabled": True, "role": "org"},
+    {"level": 2, "label": "Class", "enabled": True, "role": "class"},
+    {"level": 3, "label": "Section", "enabled": True, "role": "section"},
+    {"level": 4, "label": "Sub-section", "enabled": True, "role": "org"},
+    {"level": 5, "label": "Student", "enabled": False, "role": "roster"},
 ]
+
+
+def _labels_from_config(row: InstituteOrgConfig) -> list[dict[str, Any]]:
+    try:
+        labels = json.loads(row.level_labels_json or "[]")
+    except json.JSONDecodeError:
+        labels = list(DEFAULT_LABELS)
+    return labels if isinstance(labels, list) else list(DEFAULT_LABELS)
+
+
+def roster_org_level(labels: list[dict[str, Any]], enabled_depth: int) -> int | None:
+    for item in labels:
+        if item.get("level") == enabled_depth and item.get("enabled") and item.get("role") == "roster":
+            return enabled_depth
+    for item in labels:
+        if item.get("level") == enabled_depth and item.get("enabled"):
+            if "student" in str(item.get("label", "")).lower():
+                return enabled_depth
+    if enabled_depth >= 5:
+        for item in labels:
+            if item.get("level") == 5 and item.get("enabled") and "student" in str(item.get("label", "")).lower():
+                return 5
+    return None
+
+
+def normalize_level_labels(enabled_depth: int, level_labels: list[dict]) -> list[dict[str, Any]]:
+    by_level = {int(l["level"]): l for l in level_labels if "level" in l}
+    out: list[dict[str, Any]] = []
+    for lvl in range(1, enabled_depth + 1):
+        prev = by_level.get(lvl, {})
+        if lvl == CLASS_ORG_LEVEL:
+            out.append(
+                {
+                    "level": lvl,
+                    "label": (prev.get("label") or "Class").strip()[:80] or "Class",
+                    "enabled": True,
+                    "role": "class",
+                }
+            )
+        elif lvl == SECTION_ORG_LEVEL:
+            out.append(
+                {
+                    "level": lvl,
+                    "label": (prev.get("label") or "Section").strip()[:80] or "Section",
+                    "enabled": True,
+                    "role": "section",
+                }
+            )
+        elif prev.get("role") == "roster" and lvl == enabled_depth:
+            out.append(
+                {
+                    "level": lvl,
+                    "label": (prev.get("label") or "Student").strip()[:80] or "Student",
+                    "enabled": bool(prev.get("enabled", True)),
+                    "role": "roster",
+                }
+            )
+        elif prev:
+            out.append(
+                {
+                    "level": lvl,
+                    "label": str(prev.get("label", f"Level {lvl}")).strip()[:80] or f"Level {lvl}",
+                    "enabled": bool(prev.get("enabled", True)),
+                    "role": str(prev.get("role") or "org"),
+                }
+            )
+        else:
+            out.append({"level": lvl, "label": f"Level {lvl}", "enabled": True, "role": "org"})
+    return out
+
+
+def manual_org_levels(enabled_depth: int, labels: list[dict[str, Any]]) -> set[int]:
+    roster = roster_org_level(labels, enabled_depth)
+    levels = set(range(1, enabled_depth + 1))
+    levels.discard(SECTION_ORG_LEVEL)
+    if roster is not None:
+        levels.discard(roster)
+    return levels
 
 
 def _default_labels_json() -> str:
@@ -72,12 +155,12 @@ def put_org_config(
     db: Session, institute_id: str, user_id: str, enabled_depth: int, level_labels: list[dict]
 ) -> dict:
     _require_fee_manage(db, institute_id, user_id)
-    if enabled_depth < 3 or enabled_depth > 5:
-        raise ValueError("enabledDepth must be 3–5")
+    if enabled_depth < ORG_MIN_DEPTH or enabled_depth > ORG_MAX_DEPTH:
+        raise ValueError(f"enabledDepth must be {ORG_MIN_DEPTH}–{ORG_MAX_DEPTH}")
     row = ensure_org_config(db, institute_id)
     row.enabled_depth = enabled_depth
-    if level_labels:
-        row.level_labels_json = json.dumps(level_labels)
+    normalized = normalize_level_labels(enabled_depth, level_labels or [])
+    row.level_labels_json = json.dumps(normalized)
     db.commit()
     db.refresh(row)
     return org_config_to_dict(row)
@@ -170,25 +253,29 @@ def sync_org_tree(db: Session, institute_id: str) -> None:
                 )
             )
         )
-        for student_id in student_ids:
-            existing = db.scalar(
-                select(OrgNode).where(
-                    OrgNode.institute_id == institute_id,
-                    OrgNode.level == 5,
-                    OrgNode.student_user_id == student_id,
-                    OrgNode.parent_id == sec_node.id,
-                )
-            )
-            if not existing:
-                db.add(
-                    OrgNode(
-                        institute_id=institute_id,
-                        parent_id=sec_node.id,
-                        level=5,
-                        label=student_id[:8],
-                        student_user_id=student_id,
+        cfg = ensure_org_config(db, institute_id)
+        label_rows = _labels_from_config(cfg)
+        student_level = roster_org_level(label_rows, cfg.enabled_depth)
+        if student_level is not None:
+            for student_id in student_ids:
+                existing = db.scalar(
+                    select(OrgNode).where(
+                        OrgNode.institute_id == institute_id,
+                        OrgNode.level == student_level,
+                        OrgNode.student_user_id == student_id,
+                        OrgNode.parent_id == sec_node.id,
                     )
                 )
+                if not existing:
+                    db.add(
+                        OrgNode(
+                            institute_id=institute_id,
+                            parent_id=sec_node.id,
+                            level=student_level,
+                            label=student_id[:8],
+                            student_user_id=student_id,
+                        )
+                    )
 
     db.commit()
     _backfill_node_defaults_from_ladder(db, institute_id)
@@ -265,7 +352,6 @@ def _backfill_node_defaults_from_ladder(db: Session, institute_id: str) -> None:
                 OrgNode.institute_id == institute_id,
                 OrgNode.parent_id == sec_node.id,
                 OrgNode.student_user_id == fee.student_id,
-                OrgNode.level == 5,
             )
         )
         if stu_node:
@@ -287,6 +373,7 @@ def node_to_dict(node: OrgNode) -> dict:
         "parentId": node.parent_id,
         "level": node.level,
         "label": node.label,
+        "description": node.description or "",
         "sectionId": node.section_id,
         "studentUserId": node.student_user_id,
     }
@@ -302,20 +389,29 @@ def list_org_nodes_flat(db: Session, institute_id: str, user_id: str) -> list[di
 
 
 def _validate_org_parent(db: Session, institute_id: str, parent_id: str | None, level: int) -> None:
+    if level == CLASS_ORG_LEVEL:
+        if not parent_id:
+            raise ValueError("parentId required")
+        parent = db.get(OrgNode, parent_id)
+        if not parent or parent.institute_id != institute_id:
+            raise ValueError("Parent node not found")
+        if parent.level not in {0, 1}:
+            raise ValueError("Class must be under a school band or institute root")
+        return
     if level == 1:
         root = _find_root(db, institute_id)
         if not root or parent_id != root.id:
-            raise ValueError("School band must hang under the institute root")
+            raise ValueError("Top tier must hang under the institute root")
         return
+    if level == SECTION_ORG_LEVEL:
+        raise ValueError("Use the sections API for section nodes")
     if not parent_id:
         raise ValueError("parentId required")
     parent = db.get(OrgNode, parent_id)
     if not parent or parent.institute_id != institute_id:
         raise ValueError("Parent node not found")
-    if level == 2 and parent.level not in {0, 1}:
-        raise ValueError("Class must be under a school band or institute root")
-    if level == 4 and parent.level != 3:
-        raise ValueError("Sub-section must be under a section")
+    if parent.level + 1 != level:
+        raise ValueError("Parent must be exactly one level above")
 
 
 def create_org_node(
@@ -325,6 +421,7 @@ def create_org_node(
     parent_id: str | None,
     level: int,
     label: str,
+    description: str = "",
     *,
     academic: bool = False,
 ) -> dict:
@@ -334,8 +431,18 @@ def create_org_node(
         require_owner(db, institute_id, user_id)
     else:
         _require_fee_manage(db, institute_id, user_id)
-    if level not in {1, 2, 4}:
-        raise ValueError("Manual nodes allowed at levels 1 (band), 2 (class), or 4 (sub-section)")
+    cfg = ensure_org_config(db, institute_id)
+    label_rows = _labels_from_config(cfg)
+    if level == SECTION_ORG_LEVEL:
+        raise ValueError("Use the sections API for section nodes")
+    roster = roster_org_level(label_rows, cfg.enabled_depth)
+    if roster is not None and level == roster:
+        raise ValueError("Roster level is synced from class enrollment")
+    allowed = manual_org_levels(cfg.enabled_depth, label_rows)
+    if level not in allowed:
+        raise ValueError(f"Level {level} is not configured for manual org nodes")
+    if level > cfg.enabled_depth:
+        raise ValueError("Level exceeds configured hierarchy depth")
     if level == 1:
         root = _find_root(db, institute_id)
         if not root:
@@ -348,6 +455,7 @@ def create_org_node(
         parent_id=parent_id,
         level=level,
         label=label.strip()[:200],
+        description=(description or "").strip()[:500],
     )
     db.add(node)
     db.commit()
@@ -409,7 +517,6 @@ def resolve_from_org_tree(
             OrgNode.institute_id == institute_id,
             OrgNode.parent_id == sec_node.id,
             OrgNode.student_user_id == student_id,
-            OrgNode.level == 5,
         )
     )
     if not start:
@@ -428,7 +535,7 @@ def resolve_from_org_tree(
         if row.amount_paise > 0 or row.fee_plan_id or row.fee_structure_id:
             label = (
                 "student"
-                if node.level == 5
+                if node.student_user_id
                 else "section"
                 if node.level == 3
                 else "class"

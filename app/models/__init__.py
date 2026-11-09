@@ -279,6 +279,7 @@ class OrgNode(Base):
     parent_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("org_nodes.id"), nullable=True)
     level: Mapped[int] = mapped_column(Integer)
     label: Mapped[str] = mapped_column(String(200))
+    description: Mapped[str] = mapped_column(String(500), default="")
     section_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("sections.id"), nullable=True)
     student_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 

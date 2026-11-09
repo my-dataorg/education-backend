@@ -41,16 +41,38 @@ def get_academic_tree(db: Session, institute_id: str, user_id: str) -> dict:
             .order_by(OrgNode.level, OrgNode.label)
         )
     )
-    flat = [node_to_dict(n) for n in rows if n.level != 5]
+    from app.services.org_fee import roster_org_level
+
+    depth = config.get("enabledDepth", 4)
+    labels = config.get("levelLabels") or []
+    roster = roster_org_level(labels, depth)
+    flat = [
+        node_to_dict(n)
+        for n in rows
+        if n.level <= depth and (roster is None or n.level != roster)
+    ]
     return {"config": config, "tree": _nest_nodes(flat)}
 
 
 def create_academic_node(
-    db: Session, institute_id: str, user_id: str, parent_id: str | None, level: int, label: str
+    db: Session,
+    institute_id: str,
+    user_id: str,
+    parent_id: str | None,
+    level: int,
+    label: str,
+    description: str = "",
 ) -> dict:
     require_owner(db, institute_id, user_id)
     return create_org_node(
-        db, institute_id, user_id, parent_id, level, label.strip(), academic=True
+        db,
+        institute_id,
+        user_id,
+        parent_id,
+        level,
+        label.strip(),
+        description,
+        academic=True,
     )
 
 
@@ -61,6 +83,7 @@ def create_section_under_class(
     parent_class_org_node_id: str,
     name: str,
     branch_id: str | None = None,
+    description: str = "",
 ) -> dict:
     require_owner(db, institute_id, user_id)
     class_node = db.get(OrgNode, parent_class_org_node_id)
@@ -87,6 +110,9 @@ def create_section_under_class(
             OrgNode.level == 3,
         )
     )
+    if sec_node and description.strip():
+        sec_node.description = description.strip()[:500]
+        db.commit()
     return {
         "sectionId": section.id,
         "name": section.name,
@@ -99,15 +125,49 @@ def create_section_under_class(
 def put_academic_org_config(
     db: Session, institute_id: str, user_id: str, enabled_depth: int, level_labels: list[dict]
 ) -> dict:
-    from app.services.org_fee import ensure_org_config, org_config_to_dict
+    from app.services.org_fee import (
+        ORG_MAX_DEPTH,
+        ORG_MIN_DEPTH,
+        ensure_org_config,
+        normalize_level_labels,
+        org_config_to_dict,
+    )
 
     require_owner(db, institute_id, user_id)
-    if enabled_depth < 3 or enabled_depth > 5:
-        raise ValueError("enabledDepth must be 3–5")
+    if enabled_depth < ORG_MIN_DEPTH or enabled_depth > ORG_MAX_DEPTH:
+        raise ValueError(f"enabledDepth must be {ORG_MIN_DEPTH}–{ORG_MAX_DEPTH}")
     row = ensure_org_config(db, institute_id)
     row.enabled_depth = enabled_depth
-    if level_labels:
-        row.level_labels_json = json.dumps(level_labels)
+    row.level_labels_json = json.dumps(normalize_level_labels(enabled_depth, level_labels or []))
     db.commit()
     db.refresh(row)
     return org_config_to_dict(row)
+
+
+def delete_academic_node(db: Session, institute_id: str, user_id: str, node_id: str) -> None:
+    from app.services.sections import delete_section as remove_section
+
+    require_owner(db, institute_id, user_id)
+    node = db.get(OrgNode, node_id)
+    if not node or node.institute_id != institute_id:
+        raise ValueError("Node not found")
+    if node.level == 0:
+        raise ValueError("Cannot remove the institute root")
+    if node.student_user_id:
+        raise ValueError("Remove students from the class roster")
+    child_count = db.scalar(
+        select(OrgNode.id).where(OrgNode.parent_id == node_id, OrgNode.institute_id == institute_id).limit(1)
+    )
+    if child_count:
+        raise ValueError("Remove child items first")
+    if node.section_id:
+        section_id = node.section_id
+        remove_section(db, institute_id, section_id)
+        stale = db.get(OrgNode, node_id)
+        if stale:
+            db.delete(stale)
+        db.commit()
+        sync_org_tree(db, institute_id)
+        return
+    db.delete(node)
+    db.commit()

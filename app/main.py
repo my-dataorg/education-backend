@@ -4252,7 +4252,13 @@ def create_academic_structure_node(
 ):
     try:
         row = academic_service.create_academic_node(
-            db, institute_id, user["id"], body.parentId, body.level, body.label
+            db,
+            institute_id,
+            user["id"],
+            body.parentId,
+            body.level,
+            body.label,
+            body.description,
         )
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
@@ -4280,12 +4286,28 @@ def create_academic_section(
             body.parentClassOrgNodeId,
             body.name,
             body.branchId,
+            body.description,
         )
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return AcademicSectionOut(**row)
+
+
+@app.delete("/v1/institutes/{institute_id}/academic-structure/nodes/{node_id}", status_code=204)
+def delete_academic_structure_node(
+    institute_id: str,
+    node_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_education_subscription),
+):
+    try:
+        academic_service.delete_academic_node(db, institute_id, user["id"], node_id)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @app.put("/v1/institutes/{institute_id}/academic-structure/org-config", response_model=InstituteOrgConfigOut)
