@@ -108,6 +108,18 @@ def test_institute_expense(client: TestClient, db: Session):
     assert len(items.json()) == 1
 
 
+def test_apply_unallocated_payments_to_lines():
+    from app.services.fee_finance import apply_unallocated_payments_to_lines
+
+    lines = [
+        {"feeStructureId": "a", "amountPaise": 1_000_000, "paidPaise": 0, "balancePaise": 1_000_000},
+        {"feeStructureId": "b", "amountPaise": 3_200_000, "paidPaise": 0, "balancePaise": 3_200_000},
+    ]
+    synced = apply_unallocated_payments_to_lines(lines, 4_200_000)
+    assert sum(r["paidPaise"] for r in synced) == 4_200_000
+    assert sum(r["balancePaise"] for r in synced) == 0
+
+
 def test_section_fee_ledger_empty(client: TestClient, db: Session):
     institute_id, section_id = seed(db)
     overview = client.get(f"/v1/institutes/{institute_id}/section-fee-defaults")

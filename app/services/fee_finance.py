@@ -581,8 +581,9 @@ def create_expense(
     return row
 
 
-def enrich_due_row(db: Session, fee: StudentFee) -> dict:
+def enrich_due_row(db: Session, fee: StudentFee, *, org_node_label: str | None = None) -> dict:
     plan = db.get(FeePlan, fee.fee_plan_id) if fee.fee_plan_id else None
+    structure = db.get(FeeStructure, fee.fee_structure_id)
     balance = max(fee.amount_paise - fee.paid_paise, 0)
     installment_count = plan.installment_count if plan else 1
     per_installment = fee.amount_paise // installment_count if installment_count else fee.amount_paise
@@ -595,11 +596,90 @@ def enrich_due_row(db: Session, fee: StudentFee) -> dict:
         "feePlanId": fee.fee_plan_id,
         "sectionId": fee.section_id,
         "feePlanName": plan.name if plan else None,
+        "feeStructureName": structure.name if structure else None,
+        "orgNodeLabel": org_node_label,
         "installmentCount": installment_count,
         "discountPercent": plan.discount_percent if plan else 0,
         "lateFeePaise": plan.late_fee_paise if plan else 0,
         "installmentAmountPaise": per_installment,
     }
+
+
+def student_fee_lines_for_detail(
+    db: Session, institute_id: str, section_id: str, student_id: str
+) -> list[dict]:
+    from app.services.org_fee import resolve_org_fee_lines
+
+    org_lines = resolve_org_fee_lines(db, institute_id, section_id, student_id)
+    assigned = {
+        row.fee_structure_id: row
+        for row in db.scalars(
+            select(StudentFee).where(
+                StudentFee.institute_id == institute_id,
+                StudentFee.student_id == student_id,
+            )
+        )
+    }
+    out: list[dict] = []
+    seen: set[str] = set()
+    for line in org_lines:
+        fs_id = line["feeStructureId"]
+        seen.add(fs_id)
+        billed = line["amountPaise"]
+        plan_id = line.get("feePlanId")
+        plan = db.get(FeePlan, plan_id) if plan_id else None
+        if plan and plan.discount_percent > 0:
+            billed = effective_amount_paise(billed, plan)
+        if fs_id in assigned:
+            out.append(enrich_due_row(db, assigned[fs_id], org_node_label=line.get("orgNodeLabel")))
+            continue
+        balance = billed
+        installment_count = plan.installment_count if plan else 1
+        per_installment = billed // installment_count if installment_count else billed
+        out.append(
+            {
+                "studentId": student_id,
+                "feeStructureId": fs_id,
+                "amountPaise": billed,
+                "paidPaise": 0,
+                "balancePaise": balance,
+                "feePlanId": plan_id,
+                "sectionId": section_id,
+                "feePlanName": plan.name if plan else None,
+                "feeStructureName": line.get("feeStructureName"),
+                "orgNodeLabel": line.get("orgNodeLabel"),
+                "installmentCount": installment_count,
+                "discountPercent": plan.discount_percent if plan else 0,
+                "lateFeePaise": plan.late_fee_paise if plan else 0,
+                "installmentAmountPaise": per_installment,
+            }
+        )
+    for fs_id, fee in assigned.items():
+        if fs_id not in seen:
+            out.append(enrich_due_row(db, fee))
+    return out
+
+
+def apply_unallocated_payments_to_lines(fee_lines: list[dict], payment_total_paise: int) -> list[dict]:
+    """When payments exist but StudentFee rows were not updated per line, align line paid/balance."""
+    if payment_total_paise <= 0 or not fee_lines:
+        return fee_lines
+    lines = [dict(row) for row in fee_lines]
+    attributed = sum(int(row.get("paidPaise") or 0) for row in lines)
+    pool = max(payment_total_paise - attributed, 0)
+    if pool <= 0:
+        return lines
+    for row in lines:
+        if pool <= 0:
+            break
+        due = int(row.get("balancePaise") or 0)
+        if due <= 0:
+            continue
+        applied = min(due, pool)
+        row["paidPaise"] = int(row.get("paidPaise") or 0) + applied
+        row["balancePaise"] = due - applied
+        pool -= applied
+    return lines
 
 
 def payment_summary(payment: Payment) -> dict:
@@ -609,6 +689,7 @@ def payment_summary(payment: Payment) -> dict:
         "method": payment.method,
         "reference": payment.reference,
         "receiptNumber": payment.receipt_number,
+        "recordedBy": payment.recorded_by,
         "createdAt": payment.created_at,
     }
 
@@ -642,10 +723,25 @@ def list_section_fee_defaults_overview(db: Session, institute_id: str, user_id: 
     return out
 
 
+def _next_due_amount(installments: list[dict]) -> int | None:
+    if not installments:
+        return None
+    today = date.today().isoformat()
+    ordered = sorted(installments, key=lambda x: x.get("dueDate") or "")
+    for row in ordered:
+        due = row.get("dueDate") or ""
+        if due >= today and row.get("amountPaise") is not None:
+            return int(row["amountPaise"])
+    last = ordered[-1]
+    if last.get("amountPaise") is not None:
+        return int(last["amountPaise"])
+    return None
+
+
 def get_section_fee_ledger(db: Session, institute_id: str, user_id: str, section_id: str) -> dict:
     member = require_membership(db, institute_id, user_id)
-    if member.role not in {"owner", "admin", "principal", "accountant"}:
-        raise PermissionError("Fee ledger requires finance staff role")
+    if member.role not in {"owner", "admin", "principal", "accountant", "teacher"}:
+        raise PermissionError("Fee ledger requires staff access")
     _get_section(db, institute_id, section_id)
     section_default = get_section_fee_default(db, institute_id, user_id, section_id)
 
@@ -657,47 +753,57 @@ def get_section_fee_ledger(db: Session, institute_id: str, user_id: str, section
             )
         )
     )
-    from app.services.fee_resolution import resolve_standard_fee, resolved_from_label
+    from app.services.fee_submissions import pending_count_for_students
 
+    pending_by_student = pending_count_for_students(db, institute_id, section_id, student_ids)
     students_out: list[dict] = []
     for student_id in student_ids:
-        fees = list(
-            db.scalars(
-                select(StudentFee).where(
-                    StudentFee.institute_id == institute_id,
-                    StudentFee.student_id == student_id,
-                )
+        try:
+            detail = get_student_fees_detail(db, institute_id, user_id, section_id, student_id)
+        except Exception:
+            students_out.append(
+                {
+                    "studentId": student_id,
+                    "billedPaise": 0,
+                    "paidPaise": 0,
+                    "balancePaise": 0,
+                    "fees": [],
+                    "payments": [],
+                    "status": "error",
+                    "resolvedFrom": "none",
+                    "resolvedFromLabel": "Could not load",
+                    "resolvedAmountPaise": 0,
+                    "installments": [],
+                    "nextDueDate": None,
+                    "nextDueAmountPaise": None,
+                    "feePlanName": None,
+                    "feePlanType": None,
+                    "receiptCount": 0,
+                    "pendingProofCount": pending_by_student.get(student_id, 0),
+                }
             )
-        )
-        fee_lines = [enrich_due_row(db, fee) for fee in fees]
-        balance = sum(line["balancePaise"] for line in fee_lines)
-        paid_total = sum(line["paidPaise"] for line in fee_lines)
-        billed_total = sum(line["amountPaise"] for line in fee_lines)
-        resolved = resolve_standard_fee(db, institute_id, section_id, student_id)
-        payments = list(
-            db.scalars(
-                select(Payment)
-                .where(Payment.institute_id == institute_id, Payment.student_id == student_id)
-                .order_by(Payment.created_at.desc())
-                .limit(25)
-            )
-        )
+            continue
+        plan = detail.get("feePlan") or {}
+        installments = detail.get("installments") or []
         students_out.append(
             {
                 "studentId": student_id,
-                "billedPaise": billed_total or resolved["amountPaise"],
-                "paidPaise": paid_total,
-                "balancePaise": balance if billed_total else resolved["amountPaise"],
-                "fees": fee_lines,
-                "payments": [payment_summary(p) for p in payments],
-                "status": "paid" if balance == 0 and billed_total > 0 else "due" if balance > 0 else "unassigned",
-                "resolvedFrom": resolved["resolvedFrom"],
-                "resolvedFromLabel": resolved_from_label(
-                    resolved["resolvedFrom"], resolved.get("orgNodeLabel")
-                ),
-                "resolvedAmountPaise": resolved["amountPaise"],
-                "installments": resolved["installments"],
-                "nextDueDate": resolved["nextDueDate"],
+                "billedPaise": detail["billedPaise"],
+                "paidPaise": detail["paidPaise"],
+                "balancePaise": detail["balancePaise"],
+                "fees": detail["fees"],
+                "payments": detail["payments"],
+                "status": detail["status"],
+                "resolvedFrom": detail["resolvedFrom"],
+                "resolvedFromLabel": detail["resolvedFromLabel"],
+                "resolvedAmountPaise": detail["resolvedAmountPaise"],
+                "installments": installments,
+                "nextDueDate": detail.get("nextDueDate"),
+                "nextDueAmountPaise": _next_due_amount(installments),
+                "feePlanName": plan.get("name"),
+                "feePlanType": plan.get("planType"),
+                "receiptCount": len(detail.get("payments") or []),
+                "pendingProofCount": pending_by_student.get(student_id, 0),
             }
         )
 
@@ -718,18 +824,6 @@ def get_student_fees_detail(
     from app.services.fee_resolution import resolve_standard_fee, resolved_from_label
 
     resolved = resolve_standard_fee(db, institute_id, section_id, student_id)
-    fees = list(
-        db.scalars(
-            select(StudentFee).where(
-                StudentFee.institute_id == institute_id,
-                StudentFee.student_id == student_id,
-            )
-        )
-    )
-    fee_lines = [enrich_due_row(db, fee) for fee in fees]
-    balance = sum(line["balancePaise"] for line in fee_lines)
-    paid_total = sum(line["paidPaise"] for line in fee_lines)
-    billed_total = sum(line["amountPaise"] for line in fee_lines)
     payments = list(
         db.scalars(
             select(Payment)
@@ -738,12 +832,22 @@ def get_student_fees_detail(
             .limit(25)
         )
     )
+    payment_recorded_total = sum(p.amount_paise for p in payments)
+    fee_lines = student_fee_lines_for_detail(db, institute_id, section_id, student_id)
+    fee_lines = apply_unallocated_payments_to_lines(fee_lines, payment_recorded_total)
+    billed_total = sum(line["amountPaise"] for line in fee_lines)
+    paid_total = sum(line["paidPaise"] for line in fee_lines)
+    balance = sum(line["balancePaise"] for line in fee_lines)
+    billed = billed_total or resolved["amountPaise"]
+    if not fee_lines and payment_recorded_total > 0:
+        paid_total = payment_recorded_total
+        balance = max(billed - paid_total, 0)
     return {
         "studentId": student_id,
         "sectionId": section_id,
-        "billedPaise": billed_total or resolved["amountPaise"],
+        "billedPaise": billed,
         "paidPaise": paid_total,
-        "balancePaise": balance if billed_total else resolved["amountPaise"],
+        "balancePaise": balance,
         "status": "paid" if balance == 0 and billed_total > 0 else "due" if balance > 0 else "unassigned",
         "fees": fee_lines,
         "payments": [payment_summary(p) for p in payments],

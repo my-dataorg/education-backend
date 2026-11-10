@@ -140,18 +140,92 @@ def _next_receipt_number(db: Session, institute_id: str) -> str:
     return f"RCP-{institute_id[:8]}-{int(count or 0) + 1:06d}"
 
 
+def _student_fee_row(
+    db: Session, institute_id: str, student_id: str, fee_structure_id: str
+) -> StudentFee | None:
+    return db.scalar(
+        select(StudentFee).where(
+            StudentFee.institute_id == institute_id,
+            StudentFee.student_id == student_id,
+            StudentFee.fee_structure_id == fee_structure_id,
+        )
+    )
+
+
+def _billed_paise_for_structure(
+    db: Session,
+    institute_id: str,
+    section_id: str | None,
+    student_id: str,
+    fee_structure_id: str,
+    fallback_paise: int,
+) -> int:
+    if section_id:
+        from app.services.fee_finance import student_fee_lines_for_detail
+
+        for line in student_fee_lines_for_detail(db, institute_id, section_id, student_id):
+            if line["feeStructureId"] == fee_structure_id:
+                return int(line["amountPaise"])
+    structure = db.get(FeeStructure, fee_structure_id)
+    if structure and structure.institute_id == institute_id:
+        return int(structure.amount_paise)
+    return fallback_paise
+
+
+def _ensure_student_fee_row(
+    db: Session,
+    institute_id: str,
+    student_id: str,
+    fee_structure_id: str,
+    billed_paise: int,
+    section_id: str | None,
+) -> StudentFee:
+    structure = db.get(FeeStructure, fee_structure_id)
+    if not structure or structure.institute_id != institute_id:
+        raise ValueError("Fee structure not found")
+    row = _student_fee_row(db, institute_id, student_id, fee_structure_id)
+    if row:
+        if row.amount_paise < billed_paise:
+            row.amount_paise = billed_paise
+        if section_id:
+            row.section_id = section_id
+        return row
+    row = StudentFee(
+        institute_id=institute_id,
+        student_id=student_id,
+        fee_structure_id=fee_structure_id,
+        amount_paise=billed_paise,
+        section_id=section_id,
+    )
+    db.add(row)
+    db.flush()
+    return row
+
+
 def record_payment(
     db: Session,
     institute_id: str,
     user_id: str,
     student_id: str,
-    amount_paise: int,
+    amount_paise: int | None,
     method: str,
     reference: str,
+    *,
+    section_id: str | None = None,
+    allocations: list[dict] | None = None,
 ) -> Payment:
     _require_fee_manage(db, institute_id, user_id)
-    if amount_paise <= 0:
+    allocs = allocations or []
+    if allocs:
+        total = sum(int(a["amountPaise"]) for a in allocs)
+        if total <= 0:
+            raise ValueError("Payment amount must be positive")
+        amount_paise = total
+    elif not amount_paise or amount_paise <= 0:
         raise ValueError("Payment amount must be positive")
+    else:
+        amount_paise = int(amount_paise)
+
     receipt_number = _next_receipt_number(db, institute_id)
     payment = Payment(
         institute_id=institute_id,
@@ -163,25 +237,44 @@ def record_payment(
         recorded_by=user_id,
     )
     db.add(payment)
-    remaining = amount_paise
-    fees = list(
-        db.scalars(
-            select(StudentFee)
-            .where(
-                StudentFee.institute_id == institute_id,
-                StudentFee.student_id == student_id,
-                StudentFee.amount_paise > StudentFee.paid_paise,
+
+    if allocs:
+        for raw in allocs:
+            fs_id = raw["feeStructureId"]
+            pay_amt = int(raw["amountPaise"])
+            if pay_amt <= 0:
+                continue
+            billed = _billed_paise_for_structure(
+                db, institute_id, section_id, student_id, fs_id, pay_amt
             )
-            .order_by(StudentFee.id)
+            row = _ensure_student_fee_row(
+                db, institute_id, student_id, fs_id, billed, section_id
+            )
+            due = max(row.amount_paise - row.paid_paise, 0)
+            applied = min(due, pay_amt) if due > 0 else pay_amt
+            row.paid_paise += applied
+            if row.amount_paise < row.paid_paise:
+                row.amount_paise = row.paid_paise
+    else:
+        remaining = amount_paise
+        fees = list(
+            db.scalars(
+                select(StudentFee)
+                .where(
+                    StudentFee.institute_id == institute_id,
+                    StudentFee.student_id == student_id,
+                    StudentFee.amount_paise > StudentFee.paid_paise,
+                )
+                .order_by(StudentFee.id)
+            )
         )
-    )
-    for fee in fees:
-        if remaining <= 0:
-            break
-        due = fee.amount_paise - fee.paid_paise
-        applied = min(due, remaining)
-        fee.paid_paise += applied
-        remaining -= applied
+        for fee in fees:
+            if remaining <= 0:
+                break
+            due = fee.amount_paise - fee.paid_paise
+            applied = min(due, remaining)
+            fee.paid_paise += applied
+            remaining -= applied
     db.commit()
     db.refresh(payment)
     return payment

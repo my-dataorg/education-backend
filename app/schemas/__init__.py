@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class InstituteCreate(BaseModel):
@@ -1303,6 +1303,8 @@ class StudentFeeDueOut(BaseModel):
     feePlanId: str | None = None
     sectionId: str | None = None
     feePlanName: str | None = None
+    feeStructureName: str | None = None
+    orgNodeLabel: str | None = None
     installmentCount: int = 1
     discountPercent: int = 0
     lateFeePaise: int = 0
@@ -1345,13 +1347,14 @@ class FeePlanOut(BaseModel):
 
 
 class OrgLevelLabelIn(BaseModel):
-    level: int = Field(ge=1, le=5)
+    level: int = Field(ge=1, le=30)
     label: str = Field(min_length=1, max_length=80)
     enabled: bool = True
+    role: str = Field(default="org", max_length=16)
 
 
 class InstituteOrgConfigPut(BaseModel):
-    enabledDepth: int = Field(ge=3, le=5)
+    enabledDepth: int = Field(ge=3, le=20)
     levelLabels: list[OrgLevelLabelIn]
 
 
@@ -1367,6 +1370,7 @@ class OrgNodeOut(BaseModel):
     parentId: str | None = None
     level: int
     label: str
+    description: str = ""
     sectionId: str | None = None
     studentUserId: str | None = None
 
@@ -1383,6 +1387,7 @@ class AcademicTreeNodeOut(BaseModel):
     parentId: str | None = None
     level: int
     label: str
+    description: str = ""
     sectionId: str | None = None
     studentUserId: str | None = None
     children: list["AcademicTreeNodeOut"] = Field(default_factory=list)
@@ -1397,11 +1402,13 @@ class AcademicOrgNodeCreate(BaseModel):
     parentId: str | None = None
     level: int = Field(ge=1, le=4)
     label: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=500)
 
 
 class AcademicSectionCreate(BaseModel):
     parentClassOrgNodeId: str
     name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=500)
     branchId: str | None = None
 
 
@@ -1425,6 +1432,25 @@ class OrgNodeFeeDefaultOut(BaseModel):
     feePlanId: str | None = None
     feeStructureId: str | None = None
     feePlan: FeePlanOut | None = None
+
+
+class OrgNodeFeeItemIn(BaseModel):
+    feeStructureId: str
+    amountPaise: int = Field(ge=0)
+    feePlanId: str | None = None
+
+
+class OrgNodeFeeItemOut(BaseModel):
+    nodeId: str
+    feeStructureId: str
+    feeStructureName: str
+    amountPaise: int
+    feePlanId: str | None = None
+    feePlan: FeePlanOut | None = None
+
+
+class OrgNodeFeeItemsPut(BaseModel):
+    items: list[OrgNodeFeeItemIn]
 
 
 class FeeLadderDefaultPut(BaseModel):
@@ -1476,6 +1502,7 @@ class FeePaymentSummaryOut(BaseModel):
     method: str
     reference: str
     receiptNumber: str
+    recordedBy: str = ""
     createdAt: datetime
 
 
@@ -1522,6 +1549,41 @@ class SectionFeeLedgerStudentOut(BaseModel):
     resolvedAmountPaise: int = 0
     installments: list[FeeInstallmentOut] = Field(default_factory=list)
     nextDueDate: str | None = None
+    nextDueAmountPaise: int | None = None
+    feePlanName: str | None = None
+    feePlanType: str | None = None
+    receiptCount: int = 0
+    pendingProofCount: int = 0
+
+
+class FeePaymentSubmissionCreate(BaseModel):
+    sectionId: str
+    amountPaise: int = Field(ge=1)
+    method: str = Field(default="upi", pattern="^(cash|upi|bank)$")
+    reference: str = ""
+    proofNotes: str = ""
+    studentId: str | None = None
+
+
+class FeePaymentSubmissionOut(BaseModel):
+    id: str
+    instituteId: str
+    sectionId: str
+    studentId: str
+    amountPaise: int
+    method: str
+    reference: str
+    proofNotes: str
+    status: str
+    paymentId: str | None = None
+    submittedBy: str
+    reviewedBy: str | None = None
+    createdAt: datetime
+    reviewedAt: datetime | None = None
+
+
+class FeePaymentSubmissionReview(BaseModel):
+    approve: bool
 
 
 class SectionFeeLedgerOut(BaseModel):
@@ -1544,11 +1606,26 @@ class InstituteExpenseOut(BaseModel):
     createdAt: datetime
 
 
+class PaymentAllocationIn(BaseModel):
+    feeStructureId: str
+    amountPaise: int = Field(ge=1)
+
+
 class PaymentCreate(BaseModel):
     studentId: str
-    amountPaise: int = Field(ge=1)
+    amountPaise: int | None = Field(default=None, ge=1)
     method: str = Field(default="cash", pattern="^(cash|upi|bank)$")
     reference: str = ""
+    sectionId: str | None = None
+    allocations: list[PaymentAllocationIn] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def amount_or_allocations(self) -> "PaymentCreate":
+        if self.allocations:
+            return self
+        if self.amountPaise is None:
+            raise ValueError("amountPaise required when allocations are empty")
+        return self
 
 
 class PaymentOut(BaseModel):

@@ -8,11 +8,14 @@ from sqlalchemy.orm import Session
 
 from app.models import (
     ClassFeeDefault,
+    FeePlan,
+    FeeStructure,
     Institute,
     InstituteFeeDefault,
     InstituteOrgConfig,
     OrgNode,
     OrgNodeFeeDefault,
+    OrgNodeFeeItem,
     Section,
     SectionFeeDefault,
     SectionMember,
@@ -22,13 +25,96 @@ from app.services.fee_finance import plan_to_dict
 from app.services.fees import _require_fee_manage
 from app.services.institutes import require_membership
 
+ORG_MIN_DEPTH = 3
+ORG_MAX_DEPTH = 20
+CLASS_ORG_LEVEL = 2
+SECTION_ORG_LEVEL = 3
+
 DEFAULT_LABELS: list[dict[str, Any]] = [
-    {"level": 1, "label": "School band", "enabled": True},
-    {"level": 2, "label": "Class", "enabled": True},
-    {"level": 3, "label": "Section", "enabled": True},
-    {"level": 4, "label": "Sub-section", "enabled": True},
-    {"level": 5, "label": "Student", "enabled": False},
+    {"level": 1, "label": "School band", "enabled": True, "role": "org"},
+    {"level": 2, "label": "Class", "enabled": True, "role": "class"},
+    {"level": 3, "label": "Section", "enabled": True, "role": "section"},
+    {"level": 4, "label": "Sub-section", "enabled": True, "role": "org"},
+    {"level": 5, "label": "Student", "enabled": False, "role": "roster"},
 ]
+
+
+def _labels_from_config(row: InstituteOrgConfig) -> list[dict[str, Any]]:
+    try:
+        labels = json.loads(row.level_labels_json or "[]")
+    except json.JSONDecodeError:
+        labels = list(DEFAULT_LABELS)
+    return labels if isinstance(labels, list) else list(DEFAULT_LABELS)
+
+
+def roster_org_level(labels: list[dict[str, Any]], enabled_depth: int) -> int | None:
+    for item in labels:
+        if item.get("level") == enabled_depth and item.get("enabled") and item.get("role") == "roster":
+            return enabled_depth
+    for item in labels:
+        if item.get("level") == enabled_depth and item.get("enabled"):
+            if "student" in str(item.get("label", "")).lower():
+                return enabled_depth
+    if enabled_depth >= 5:
+        for item in labels:
+            if item.get("level") == 5 and item.get("enabled") and "student" in str(item.get("label", "")).lower():
+                return 5
+    return None
+
+
+def normalize_level_labels(enabled_depth: int, level_labels: list[dict]) -> list[dict[str, Any]]:
+    by_level = {int(l["level"]): l for l in level_labels if "level" in l}
+    out: list[dict[str, Any]] = []
+    for lvl in range(1, enabled_depth + 1):
+        prev = by_level.get(lvl, {})
+        if lvl == CLASS_ORG_LEVEL:
+            out.append(
+                {
+                    "level": lvl,
+                    "label": (prev.get("label") or "Class").strip()[:80] or "Class",
+                    "enabled": True,
+                    "role": "class",
+                }
+            )
+        elif lvl == SECTION_ORG_LEVEL:
+            out.append(
+                {
+                    "level": lvl,
+                    "label": (prev.get("label") or "Section").strip()[:80] or "Section",
+                    "enabled": True,
+                    "role": "section",
+                }
+            )
+        elif prev.get("role") == "roster" and lvl == enabled_depth:
+            out.append(
+                {
+                    "level": lvl,
+                    "label": (prev.get("label") or "Student").strip()[:80] or "Student",
+                    "enabled": bool(prev.get("enabled", True)),
+                    "role": "roster",
+                }
+            )
+        elif prev:
+            out.append(
+                {
+                    "level": lvl,
+                    "label": str(prev.get("label", f"Level {lvl}")).strip()[:80] or f"Level {lvl}",
+                    "enabled": bool(prev.get("enabled", True)),
+                    "role": str(prev.get("role") or "org"),
+                }
+            )
+        else:
+            out.append({"level": lvl, "label": f"Level {lvl}", "enabled": True, "role": "org"})
+    return out
+
+
+def manual_org_levels(enabled_depth: int, labels: list[dict[str, Any]]) -> set[int]:
+    roster = roster_org_level(labels, enabled_depth)
+    levels = set(range(1, enabled_depth + 1))
+    levels.discard(SECTION_ORG_LEVEL)
+    if roster is not None:
+        levels.discard(roster)
+    return levels
 
 
 def _default_labels_json() -> str:
@@ -72,12 +158,12 @@ def put_org_config(
     db: Session, institute_id: str, user_id: str, enabled_depth: int, level_labels: list[dict]
 ) -> dict:
     _require_fee_manage(db, institute_id, user_id)
-    if enabled_depth < 3 or enabled_depth > 5:
-        raise ValueError("enabledDepth must be 3–5")
+    if enabled_depth < ORG_MIN_DEPTH or enabled_depth > ORG_MAX_DEPTH:
+        raise ValueError(f"enabledDepth must be {ORG_MIN_DEPTH}–{ORG_MAX_DEPTH}")
     row = ensure_org_config(db, institute_id)
     row.enabled_depth = enabled_depth
-    if level_labels:
-        row.level_labels_json = json.dumps(level_labels)
+    normalized = normalize_level_labels(enabled_depth, level_labels or [])
+    row.level_labels_json = json.dumps(normalized)
     db.commit()
     db.refresh(row)
     return org_config_to_dict(row)
@@ -170,25 +256,29 @@ def sync_org_tree(db: Session, institute_id: str) -> None:
                 )
             )
         )
-        for student_id in student_ids:
-            existing = db.scalar(
-                select(OrgNode).where(
-                    OrgNode.institute_id == institute_id,
-                    OrgNode.level == 5,
-                    OrgNode.student_user_id == student_id,
-                    OrgNode.parent_id == sec_node.id,
-                )
-            )
-            if not existing:
-                db.add(
-                    OrgNode(
-                        institute_id=institute_id,
-                        parent_id=sec_node.id,
-                        level=5,
-                        label=student_id[:8],
-                        student_user_id=student_id,
+        cfg = ensure_org_config(db, institute_id)
+        label_rows = _labels_from_config(cfg)
+        student_level = roster_org_level(label_rows, cfg.enabled_depth)
+        if student_level is not None:
+            for student_id in student_ids:
+                existing = db.scalar(
+                    select(OrgNode).where(
+                        OrgNode.institute_id == institute_id,
+                        OrgNode.level == student_level,
+                        OrgNode.student_user_id == student_id,
+                        OrgNode.parent_id == sec_node.id,
                     )
                 )
+                if not existing:
+                    db.add(
+                        OrgNode(
+                            institute_id=institute_id,
+                            parent_id=sec_node.id,
+                            level=student_level,
+                            label=student_id[:8],
+                            student_user_id=student_id,
+                        )
+                    )
 
     db.commit()
     _backfill_node_defaults_from_ladder(db, institute_id)
@@ -214,6 +304,73 @@ def _copy_default(
     row.amount_paise = amount_paise
     row.fee_plan_id = fee_plan_id
     row.fee_structure_id = fee_structure_id
+    if fee_structure_id:
+        item = db.get(OrgNodeFeeItem, (node_id, fee_structure_id))
+        if not item:
+            item = OrgNodeFeeItem(
+                node_id=node_id,
+                fee_structure_id=fee_structure_id,
+                institute_id=institute_id,
+            )
+            db.add(item)
+        item.amount_paise = amount_paise
+        item.fee_plan_id = fee_plan_id
+
+
+def _sync_legacy_default_from_items(db: Session, institute_id: str, node_id: str) -> None:
+    items = list(
+        db.scalars(
+            select(OrgNodeFeeItem)
+            .where(OrgNodeFeeItem.node_id == node_id)
+            .order_by(OrgNodeFeeItem.fee_structure_id)
+        )
+    )
+    row = db.get(OrgNodeFeeDefault, node_id)
+    if not items:
+        return
+    primary = items[0]
+    if not row:
+        row = OrgNodeFeeDefault(node_id=node_id, institute_id=institute_id)
+        db.add(row)
+    row.amount_paise = primary.amount_paise
+    row.fee_plan_id = primary.fee_plan_id
+    row.fee_structure_id = primary.fee_structure_id
+
+
+def _node_resolved_label(node: OrgNode) -> str:
+    if node.student_user_id:
+        return "student"
+    if node.level == SECTION_ORG_LEVEL:
+        return "section"
+    if node.level == CLASS_ORG_LEVEL:
+        return "class"
+    if node.level == 0:
+        return "institute"
+    return "org"
+
+
+def _build_org_chain(
+    db: Session, institute_id: str, section_id: str, student_id: str
+) -> list[OrgNode]:
+    sync_org_tree(db, institute_id)
+    sec_node = _find_section_node(db, institute_id, section_id)
+    if not sec_node:
+        return []
+    start = db.scalar(
+        select(OrgNode).where(
+            OrgNode.institute_id == institute_id,
+            OrgNode.parent_id == sec_node.id,
+            OrgNode.student_user_id == student_id,
+        )
+    )
+    if not start:
+        start = sec_node
+    chain: list[OrgNode] = []
+    current: OrgNode | None = start
+    while current:
+        chain.append(current)
+        current = db.get(OrgNode, current.parent_id) if current.parent_id else None
+    return chain
 
 
 def _backfill_node_defaults_from_ladder(db: Session, institute_id: str) -> None:
@@ -265,7 +422,6 @@ def _backfill_node_defaults_from_ladder(db: Session, institute_id: str) -> None:
                 OrgNode.institute_id == institute_id,
                 OrgNode.parent_id == sec_node.id,
                 OrgNode.student_user_id == fee.student_id,
-                OrgNode.level == 5,
             )
         )
         if stu_node:
@@ -287,6 +443,7 @@ def node_to_dict(node: OrgNode) -> dict:
         "parentId": node.parent_id,
         "level": node.level,
         "label": node.label,
+        "description": node.description or "",
         "sectionId": node.section_id,
         "studentUserId": node.student_user_id,
     }
@@ -302,20 +459,29 @@ def list_org_nodes_flat(db: Session, institute_id: str, user_id: str) -> list[di
 
 
 def _validate_org_parent(db: Session, institute_id: str, parent_id: str | None, level: int) -> None:
+    if level == CLASS_ORG_LEVEL:
+        if not parent_id:
+            raise ValueError("parentId required")
+        parent = db.get(OrgNode, parent_id)
+        if not parent or parent.institute_id != institute_id:
+            raise ValueError("Parent node not found")
+        if parent.level not in {0, 1}:
+            raise ValueError("Class must be under a school band or institute root")
+        return
     if level == 1:
         root = _find_root(db, institute_id)
         if not root or parent_id != root.id:
-            raise ValueError("School band must hang under the institute root")
+            raise ValueError("Top tier must hang under the institute root")
         return
+    if level == SECTION_ORG_LEVEL:
+        raise ValueError("Use the sections API for section nodes")
     if not parent_id:
         raise ValueError("parentId required")
     parent = db.get(OrgNode, parent_id)
     if not parent or parent.institute_id != institute_id:
         raise ValueError("Parent node not found")
-    if level == 2 and parent.level not in {0, 1}:
-        raise ValueError("Class must be under a school band or institute root")
-    if level == 4 and parent.level != 3:
-        raise ValueError("Sub-section must be under a section")
+    if parent.level + 1 != level:
+        raise ValueError("Parent must be exactly one level above")
 
 
 def create_org_node(
@@ -325,6 +491,7 @@ def create_org_node(
     parent_id: str | None,
     level: int,
     label: str,
+    description: str = "",
     *,
     academic: bool = False,
 ) -> dict:
@@ -334,8 +501,18 @@ def create_org_node(
         require_owner(db, institute_id, user_id)
     else:
         _require_fee_manage(db, institute_id, user_id)
-    if level not in {1, 2, 4}:
-        raise ValueError("Manual nodes allowed at levels 1 (band), 2 (class), or 4 (sub-section)")
+    cfg = ensure_org_config(db, institute_id)
+    label_rows = _labels_from_config(cfg)
+    if level == SECTION_ORG_LEVEL:
+        raise ValueError("Use the sections API for section nodes")
+    roster = roster_org_level(label_rows, cfg.enabled_depth)
+    if roster is not None and level == roster:
+        raise ValueError("Roster level is synced from class enrollment")
+    allowed = manual_org_levels(cfg.enabled_depth, label_rows)
+    if level not in allowed:
+        raise ValueError(f"Level {level} is not configured for manual org nodes")
+    if level > cfg.enabled_depth:
+        raise ValueError("Level exceeds configured hierarchy depth")
     if level == 1:
         root = _find_root(db, institute_id)
         if not root:
@@ -348,6 +525,7 @@ def create_org_node(
         parent_id=parent_id,
         level=level,
         label=label.strip()[:200],
+        description=(description or "").strip()[:500],
     )
     db.add(node)
     db.commit()
@@ -355,14 +533,84 @@ def create_org_node(
     return node_to_dict(node)
 
 
+def list_node_fee_items(db: Session, institute_id: str, user_id: str, node_id: str) -> list[dict]:
+    require_membership(db, institute_id, user_id)
+    node = db.get(OrgNode, node_id)
+    if not node or node.institute_id != institute_id:
+        raise ValueError("Node not found")
+    rows = list(
+        db.scalars(
+            select(OrgNodeFeeItem)
+            .where(OrgNodeFeeItem.node_id == node_id)
+            .order_by(OrgNodeFeeItem.fee_structure_id)
+        )
+    )
+    out: list[dict] = []
+    for item in rows:
+        struct = db.get(FeeStructure, item.fee_structure_id)
+        plan = db.get(FeePlan, item.fee_plan_id) if item.fee_plan_id else None
+        out.append(
+            {
+                "nodeId": node_id,
+                "feeStructureId": item.fee_structure_id,
+                "feeStructureName": struct.name if struct else "",
+                "amountPaise": item.amount_paise,
+                "feePlanId": item.fee_plan_id,
+                "feePlan": plan_to_dict(plan, db=db) if plan else None,
+            }
+        )
+    return out
+
+
+def put_node_fee_items(
+    db: Session, institute_id: str, user_id: str, node_id: str, items: list[dict]
+) -> list[dict]:
+    _require_fee_manage(db, institute_id, user_id)
+    node = db.get(OrgNode, node_id)
+    if not node or node.institute_id != institute_id:
+        raise ValueError("Node not found")
+    for row in db.scalars(select(OrgNodeFeeItem).where(OrgNodeFeeItem.node_id == node_id)):
+        db.delete(row)
+    for raw in items:
+        fs_id = raw.get("feeStructureId") or raw.get("fee_structure_id")
+        if not fs_id:
+            continue
+        structure = db.get(FeeStructure, fs_id)
+        if not structure or structure.institute_id != institute_id:
+            raise ValueError("Fee structure not found")
+        amount = int(raw.get("amountPaise") or raw.get("amount_paise") or 0)
+        plan_id = raw.get("feePlanId") or raw.get("fee_plan_id")
+        db.add(
+            OrgNodeFeeItem(
+                node_id=node_id,
+                fee_structure_id=fs_id,
+                institute_id=institute_id,
+                amount_paise=max(amount, 0),
+                fee_plan_id=plan_id,
+            )
+        )
+    db.flush()
+    _sync_legacy_default_from_items(db, institute_id, node_id)
+    db.commit()
+    return list_node_fee_items(db, institute_id, user_id, node_id)
+
+
 def get_node_fee_default(db: Session, institute_id: str, user_id: str, node_id: str) -> dict:
     require_membership(db, institute_id, user_id)
     node = db.get(OrgNode, node_id)
     if not node or node.institute_id != institute_id:
         raise ValueError("Node not found")
+    items = list_node_fee_items(db, institute_id, user_id, node_id)
+    if items:
+        first = items[0]
+        return {
+            "nodeId": node_id,
+            "amountPaise": first["amountPaise"],
+            "feePlanId": first["feePlanId"],
+            "feeStructureId": first["feeStructureId"],
+            "feePlan": first.get("feePlan"),
+        }
     row = db.get(OrgNodeFeeDefault, node_id)
-    from app.models import FeePlan
-
     plan = db.get(FeePlan, row.fee_plan_id) if row and row.fee_plan_id else None
     return {
         "nodeId": node_id,
@@ -393,55 +641,78 @@ def put_node_fee_default(
     row.amount_paise = max(amount_paise, 0)
     row.fee_plan_id = fee_plan_id
     row.fee_structure_id = fee_structure_id
+    if fee_structure_id:
+        item = db.get(OrgNodeFeeItem, (node_id, fee_structure_id))
+        if not item:
+            item = OrgNodeFeeItem(
+                node_id=node_id,
+                fee_structure_id=fee_structure_id,
+                institute_id=institute_id,
+            )
+            db.add(item)
+        item.amount_paise = max(amount_paise, 0)
+        item.fee_plan_id = fee_plan_id
     db.commit()
     return get_node_fee_default(db, institute_id, user_id, node_id)
+
+
+def resolve_org_fee_lines(
+    db: Session, institute_id: str, section_id: str, student_id: str
+) -> list[dict]:
+    chain = _build_org_chain(db, institute_id, section_id, student_id)
+    if not chain:
+        return []
+    picked: dict[str, tuple[OrgNodeFeeItem, OrgNode]] = {}
+    for node in chain:
+        items = list(
+            db.scalars(select(OrgNodeFeeItem).where(OrgNodeFeeItem.node_id == node.id))
+        )
+        for item in items:
+            if item.amount_paise <= 0 and not item.fee_plan_id:
+                continue
+            if item.fee_structure_id not in picked:
+                picked[item.fee_structure_id] = (item, node)
+    lines: list[dict] = []
+    for fee_structure_id, (item, node) in picked.items():
+        struct = db.get(FeeStructure, fee_structure_id)
+        lines.append(
+            {
+                "feeStructureId": fee_structure_id,
+                "feeStructureName": struct.name if struct else "",
+                "amountPaise": item.amount_paise,
+                "feePlanId": item.fee_plan_id,
+                "resolvedFrom": _node_resolved_label(node),
+                "orgNodeId": node.id,
+                "orgNodeLabel": node.label,
+            }
+        )
+    lines.sort(key=lambda x: x["feeStructureName"])
+    return lines
 
 
 def resolve_from_org_tree(
     db: Session, institute_id: str, section_id: str, student_id: str
 ) -> dict | None:
-    sync_org_tree(db, institute_id)
-    sec_node = _find_section_node(db, institute_id, section_id)
-    if not sec_node:
-        return None
-    start = db.scalar(
-        select(OrgNode).where(
-            OrgNode.institute_id == institute_id,
-            OrgNode.parent_id == sec_node.id,
-            OrgNode.student_user_id == student_id,
-            OrgNode.level == 5,
-        )
-    )
-    if not start:
-        start = sec_node
-
-    chain: list[OrgNode] = []
-    current: OrgNode | None = start
-    while current:
-        chain.append(current)
-        current = db.get(OrgNode, current.parent_id) if current.parent_id else None
-
+    lines = resolve_org_fee_lines(db, institute_id, section_id, student_id)
+    if lines:
+        line = lines[0]
+        return {
+            "amountPaise": line["amountPaise"],
+            "feePlanId": line["feePlanId"],
+            "feeStructureId": line["feeStructureId"],
+            "resolvedFrom": line["resolvedFrom"],
+            "orgNodeId": line["orgNodeId"],
+            "orgNodeLabel": line["orgNodeLabel"],
+        }
+    chain = _build_org_chain(db, institute_id, section_id, student_id)
     for node in chain:
         row = db.get(OrgNodeFeeDefault, node.id)
-        if not row:
-            continue
-        if row.amount_paise > 0 or row.fee_plan_id or row.fee_structure_id:
-            label = (
-                "student"
-                if node.level == 5
-                else "section"
-                if node.level == 3
-                else "class"
-                if node.level == 2
-                else "institute"
-                if node.level == 0
-                else "org"
-            )
+        if row and row.amount_paise > 0:
             return {
                 "amountPaise": row.amount_paise,
                 "feePlanId": row.fee_plan_id,
                 "feeStructureId": row.fee_structure_id,
-                "resolvedFrom": label,
+                "resolvedFrom": _node_resolved_label(node),
                 "orgNodeId": node.id,
                 "orgNodeLabel": node.label,
             }

@@ -74,3 +74,71 @@ def test_org_tree_and_node_default(client: TestClient, db: Session):
     body = detail.json()
     assert body["resolvedAmountPaise"] == 500000
     assert body["resolvedFrom"] == "section"
+
+
+def test_org_node_fee_items_and_student_lines(client: TestClient, db: Session):
+    institute_id, section_id = seed(db)
+    flat = client.get(f"/v1/institutes/{institute_id}/org-nodes").json()
+    sec_node = next(n for n in flat if n.get("sectionId") == section_id)
+
+    tuition = client.post(
+        f"/v1/institutes/{institute_id}/fee-structures",
+        json={"name": "Tuition", "amountPaise": 100},
+    )
+    transport = client.post(
+        f"/v1/institutes/{institute_id}/fee-structures",
+        json={"name": "Transport", "amountPaise": 100},
+    )
+    assert tuition.status_code == 201
+    assert transport.status_code == 201
+    t_id, tr_id = tuition.json()["id"], transport.json()["id"]
+
+    put = client.put(
+        f"/v1/institutes/{institute_id}/org-nodes/{sec_node['id']}/fee-items",
+        json={
+            "items": [
+                {"feeStructureId": t_id, "amountPaise": 600000, "feePlanId": None},
+                {"feeStructureId": tr_id, "amountPaise": 50000, "feePlanId": None},
+            ]
+        },
+    )
+    assert put.status_code == 200
+    assert len(put.json()) == 2
+
+    detail = client.get(
+        f"/v1/institutes/{institute_id}/sections/{section_id}/students/stu-1/fees"
+    )
+    assert detail.status_code == 200
+    fees = {row["feeStructureId"]: row for row in detail.json()["fees"]}
+    assert fees[t_id]["amountPaise"] == 600000
+    assert fees[tr_id]["amountPaise"] == 50000
+    assert detail.json()["billedPaise"] == 650000
+
+
+def test_resolver_prefers_deeper_org_node(client: TestClient, db: Session):
+    institute_id, section_id = seed(db)
+    flat = client.get(f"/v1/institutes/{institute_id}/org-nodes").json()
+    sec_node = next(n for n in flat if n.get("sectionId") == section_id)
+    parent_id = sec_node.get("parentId")
+    assert parent_id
+
+    tuition = client.post(
+        f"/v1/institutes/{institute_id}/fee-structures",
+        json={"name": "Annual tuition", "amountPaise": 100},
+    ).json()
+    t_id = tuition["id"]
+
+    client.put(
+        f"/v1/institutes/{institute_id}/org-nodes/{parent_id}/fee-items",
+        json={"items": [{"feeStructureId": t_id, "amountPaise": 400000, "feePlanId": None}]},
+    )
+    client.put(
+        f"/v1/institutes/{institute_id}/org-nodes/{sec_node['id']}/fee-items",
+        json={"items": [{"feeStructureId": t_id, "amountPaise": 500000, "feePlanId": None}]},
+    )
+
+    detail = client.get(
+        f"/v1/institutes/{institute_id}/sections/{section_id}/students/stu-1/fees"
+    ).json()
+    tuition_line = next(f for f in detail["fees"] if f["feeStructureId"] == t_id)
+    assert tuition_line["amountPaise"] == 500000
