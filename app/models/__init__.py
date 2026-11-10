@@ -296,6 +296,19 @@ class OrgNodeFeeDefault(Base):
     )
 
 
+class OrgNodeFeeItem(Base):
+    __tablename__ = "org_node_fee_items"
+    __table_args__ = (UniqueConstraint("node_id", "fee_structure_id"),)
+
+    node_id: Mapped[str] = mapped_column(String(36), ForeignKey("org_nodes.id"), primary_key=True)
+    fee_structure_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("fee_structures.id"), primary_key=True
+    )
+    institute_id: Mapped[str] = mapped_column(String(36), ForeignKey("institutes.id"))
+    amount_paise: Mapped[int] = mapped_column(Integer, default=0)
+    fee_plan_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("fee_plans.id"), nullable=True)
+
+
 class InstituteExpense(Base):
     __tablename__ = "institute_expenses"
 
@@ -324,6 +337,25 @@ class Payment(Base):
     receipt_number: Mapped[str] = mapped_column(String(64))
     recorded_by: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class FeePaymentSubmission(Base):
+    __tablename__ = "fee_payment_submissions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    institute_id: Mapped[str] = mapped_column(String(36), ForeignKey("institutes.id"))
+    section_id: Mapped[str] = mapped_column(String(36), ForeignKey("sections.id"))
+    student_id: Mapped[str] = mapped_column(String(64))
+    amount_paise: Mapped[int] = mapped_column(Integer)
+    method: Mapped[str] = mapped_column(String(32), default="upi")
+    reference: Mapped[str] = mapped_column(String(200), default="")
+    proof_notes: Mapped[str] = mapped_column(String(500), default="")
+    status: Mapped[str] = mapped_column(String(16), default="pending")
+    payment_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("payments.id"), nullable=True)
+    submitted_by: Mapped[str] = mapped_column(String(64))
+    reviewed_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class InstituteInvitation(Base):

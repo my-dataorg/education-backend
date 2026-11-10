@@ -8,11 +8,14 @@ from sqlalchemy.orm import Session
 
 from app.models import (
     ClassFeeDefault,
+    FeePlan,
+    FeeStructure,
     Institute,
     InstituteFeeDefault,
     InstituteOrgConfig,
     OrgNode,
     OrgNodeFeeDefault,
+    OrgNodeFeeItem,
     Section,
     SectionFeeDefault,
     SectionMember,
@@ -301,6 +304,73 @@ def _copy_default(
     row.amount_paise = amount_paise
     row.fee_plan_id = fee_plan_id
     row.fee_structure_id = fee_structure_id
+    if fee_structure_id:
+        item = db.get(OrgNodeFeeItem, (node_id, fee_structure_id))
+        if not item:
+            item = OrgNodeFeeItem(
+                node_id=node_id,
+                fee_structure_id=fee_structure_id,
+                institute_id=institute_id,
+            )
+            db.add(item)
+        item.amount_paise = amount_paise
+        item.fee_plan_id = fee_plan_id
+
+
+def _sync_legacy_default_from_items(db: Session, institute_id: str, node_id: str) -> None:
+    items = list(
+        db.scalars(
+            select(OrgNodeFeeItem)
+            .where(OrgNodeFeeItem.node_id == node_id)
+            .order_by(OrgNodeFeeItem.fee_structure_id)
+        )
+    )
+    row = db.get(OrgNodeFeeDefault, node_id)
+    if not items:
+        return
+    primary = items[0]
+    if not row:
+        row = OrgNodeFeeDefault(node_id=node_id, institute_id=institute_id)
+        db.add(row)
+    row.amount_paise = primary.amount_paise
+    row.fee_plan_id = primary.fee_plan_id
+    row.fee_structure_id = primary.fee_structure_id
+
+
+def _node_resolved_label(node: OrgNode) -> str:
+    if node.student_user_id:
+        return "student"
+    if node.level == SECTION_ORG_LEVEL:
+        return "section"
+    if node.level == CLASS_ORG_LEVEL:
+        return "class"
+    if node.level == 0:
+        return "institute"
+    return "org"
+
+
+def _build_org_chain(
+    db: Session, institute_id: str, section_id: str, student_id: str
+) -> list[OrgNode]:
+    sync_org_tree(db, institute_id)
+    sec_node = _find_section_node(db, institute_id, section_id)
+    if not sec_node:
+        return []
+    start = db.scalar(
+        select(OrgNode).where(
+            OrgNode.institute_id == institute_id,
+            OrgNode.parent_id == sec_node.id,
+            OrgNode.student_user_id == student_id,
+        )
+    )
+    if not start:
+        start = sec_node
+    chain: list[OrgNode] = []
+    current: OrgNode | None = start
+    while current:
+        chain.append(current)
+        current = db.get(OrgNode, current.parent_id) if current.parent_id else None
+    return chain
 
 
 def _backfill_node_defaults_from_ladder(db: Session, institute_id: str) -> None:
@@ -463,14 +533,84 @@ def create_org_node(
     return node_to_dict(node)
 
 
+def list_node_fee_items(db: Session, institute_id: str, user_id: str, node_id: str) -> list[dict]:
+    require_membership(db, institute_id, user_id)
+    node = db.get(OrgNode, node_id)
+    if not node or node.institute_id != institute_id:
+        raise ValueError("Node not found")
+    rows = list(
+        db.scalars(
+            select(OrgNodeFeeItem)
+            .where(OrgNodeFeeItem.node_id == node_id)
+            .order_by(OrgNodeFeeItem.fee_structure_id)
+        )
+    )
+    out: list[dict] = []
+    for item in rows:
+        struct = db.get(FeeStructure, item.fee_structure_id)
+        plan = db.get(FeePlan, item.fee_plan_id) if item.fee_plan_id else None
+        out.append(
+            {
+                "nodeId": node_id,
+                "feeStructureId": item.fee_structure_id,
+                "feeStructureName": struct.name if struct else "",
+                "amountPaise": item.amount_paise,
+                "feePlanId": item.fee_plan_id,
+                "feePlan": plan_to_dict(plan, db=db) if plan else None,
+            }
+        )
+    return out
+
+
+def put_node_fee_items(
+    db: Session, institute_id: str, user_id: str, node_id: str, items: list[dict]
+) -> list[dict]:
+    _require_fee_manage(db, institute_id, user_id)
+    node = db.get(OrgNode, node_id)
+    if not node or node.institute_id != institute_id:
+        raise ValueError("Node not found")
+    for row in db.scalars(select(OrgNodeFeeItem).where(OrgNodeFeeItem.node_id == node_id)):
+        db.delete(row)
+    for raw in items:
+        fs_id = raw.get("feeStructureId") or raw.get("fee_structure_id")
+        if not fs_id:
+            continue
+        structure = db.get(FeeStructure, fs_id)
+        if not structure or structure.institute_id != institute_id:
+            raise ValueError("Fee structure not found")
+        amount = int(raw.get("amountPaise") or raw.get("amount_paise") or 0)
+        plan_id = raw.get("feePlanId") or raw.get("fee_plan_id")
+        db.add(
+            OrgNodeFeeItem(
+                node_id=node_id,
+                fee_structure_id=fs_id,
+                institute_id=institute_id,
+                amount_paise=max(amount, 0),
+                fee_plan_id=plan_id,
+            )
+        )
+    db.flush()
+    _sync_legacy_default_from_items(db, institute_id, node_id)
+    db.commit()
+    return list_node_fee_items(db, institute_id, user_id, node_id)
+
+
 def get_node_fee_default(db: Session, institute_id: str, user_id: str, node_id: str) -> dict:
     require_membership(db, institute_id, user_id)
     node = db.get(OrgNode, node_id)
     if not node or node.institute_id != institute_id:
         raise ValueError("Node not found")
+    items = list_node_fee_items(db, institute_id, user_id, node_id)
+    if items:
+        first = items[0]
+        return {
+            "nodeId": node_id,
+            "amountPaise": first["amountPaise"],
+            "feePlanId": first["feePlanId"],
+            "feeStructureId": first["feeStructureId"],
+            "feePlan": first.get("feePlan"),
+        }
     row = db.get(OrgNodeFeeDefault, node_id)
-    from app.models import FeePlan
-
     plan = db.get(FeePlan, row.fee_plan_id) if row and row.fee_plan_id else None
     return {
         "nodeId": node_id,
@@ -501,54 +641,78 @@ def put_node_fee_default(
     row.amount_paise = max(amount_paise, 0)
     row.fee_plan_id = fee_plan_id
     row.fee_structure_id = fee_structure_id
+    if fee_structure_id:
+        item = db.get(OrgNodeFeeItem, (node_id, fee_structure_id))
+        if not item:
+            item = OrgNodeFeeItem(
+                node_id=node_id,
+                fee_structure_id=fee_structure_id,
+                institute_id=institute_id,
+            )
+            db.add(item)
+        item.amount_paise = max(amount_paise, 0)
+        item.fee_plan_id = fee_plan_id
     db.commit()
     return get_node_fee_default(db, institute_id, user_id, node_id)
+
+
+def resolve_org_fee_lines(
+    db: Session, institute_id: str, section_id: str, student_id: str
+) -> list[dict]:
+    chain = _build_org_chain(db, institute_id, section_id, student_id)
+    if not chain:
+        return []
+    picked: dict[str, tuple[OrgNodeFeeItem, OrgNode]] = {}
+    for node in chain:
+        items = list(
+            db.scalars(select(OrgNodeFeeItem).where(OrgNodeFeeItem.node_id == node.id))
+        )
+        for item in items:
+            if item.amount_paise <= 0 and not item.fee_plan_id:
+                continue
+            if item.fee_structure_id not in picked:
+                picked[item.fee_structure_id] = (item, node)
+    lines: list[dict] = []
+    for fee_structure_id, (item, node) in picked.items():
+        struct = db.get(FeeStructure, fee_structure_id)
+        lines.append(
+            {
+                "feeStructureId": fee_structure_id,
+                "feeStructureName": struct.name if struct else "",
+                "amountPaise": item.amount_paise,
+                "feePlanId": item.fee_plan_id,
+                "resolvedFrom": _node_resolved_label(node),
+                "orgNodeId": node.id,
+                "orgNodeLabel": node.label,
+            }
+        )
+    lines.sort(key=lambda x: x["feeStructureName"])
+    return lines
 
 
 def resolve_from_org_tree(
     db: Session, institute_id: str, section_id: str, student_id: str
 ) -> dict | None:
-    sync_org_tree(db, institute_id)
-    sec_node = _find_section_node(db, institute_id, section_id)
-    if not sec_node:
-        return None
-    start = db.scalar(
-        select(OrgNode).where(
-            OrgNode.institute_id == institute_id,
-            OrgNode.parent_id == sec_node.id,
-            OrgNode.student_user_id == student_id,
-        )
-    )
-    if not start:
-        start = sec_node
-
-    chain: list[OrgNode] = []
-    current: OrgNode | None = start
-    while current:
-        chain.append(current)
-        current = db.get(OrgNode, current.parent_id) if current.parent_id else None
-
+    lines = resolve_org_fee_lines(db, institute_id, section_id, student_id)
+    if lines:
+        line = lines[0]
+        return {
+            "amountPaise": line["amountPaise"],
+            "feePlanId": line["feePlanId"],
+            "feeStructureId": line["feeStructureId"],
+            "resolvedFrom": line["resolvedFrom"],
+            "orgNodeId": line["orgNodeId"],
+            "orgNodeLabel": line["orgNodeLabel"],
+        }
+    chain = _build_org_chain(db, institute_id, section_id, student_id)
     for node in chain:
         row = db.get(OrgNodeFeeDefault, node.id)
-        if not row:
-            continue
-        if row.amount_paise > 0 or row.fee_plan_id or row.fee_structure_id:
-            label = (
-                "student"
-                if node.student_user_id
-                else "section"
-                if node.level == 3
-                else "class"
-                if node.level == 2
-                else "institute"
-                if node.level == 0
-                else "org"
-            )
+        if row and row.amount_paise > 0:
             return {
                 "amountPaise": row.amount_paise,
                 "feePlanId": row.fee_plan_id,
                 "feeStructureId": row.fee_structure_id,
-                "resolvedFrom": label,
+                "resolvedFrom": _node_resolved_label(node),
                 "orgNodeId": node.id,
                 "orgNodeLabel": node.label,
             }

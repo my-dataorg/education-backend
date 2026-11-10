@@ -1185,6 +1185,19 @@ def migrate_fee_org_tree(engine: Engine) -> None:
                 ADD COLUMN IF NOT EXISTS class_org_node_id VARCHAR(36);
                 ALTER TABLE org_nodes
                 ADD COLUMN IF NOT EXISTS description VARCHAR(500) NOT NULL DEFAULT '';
+                CREATE TABLE IF NOT EXISTS org_node_fee_items (
+                    node_id VARCHAR(36) NOT NULL REFERENCES org_nodes(id),
+                    fee_structure_id VARCHAR(36) NOT NULL REFERENCES fee_structures(id),
+                    institute_id VARCHAR(36) NOT NULL REFERENCES institutes(id),
+                    amount_paise INTEGER NOT NULL DEFAULT 0,
+                    fee_plan_id VARCHAR(36) REFERENCES fee_plans(id),
+                    PRIMARY KEY (node_id, fee_structure_id)
+                );
+                INSERT INTO org_node_fee_items (node_id, fee_structure_id, institute_id, amount_paise, fee_plan_id)
+                SELECT node_id, fee_structure_id, institute_id, amount_paise, fee_plan_id
+                FROM org_node_fee_defaults
+                WHERE fee_structure_id IS NOT NULL
+                ON CONFLICT (node_id, fee_structure_id) DO NOTHING;
                 """
             )
         )
@@ -1227,6 +1240,32 @@ def migrate_fee_ladder(engine: Engine) -> None:
                 );
                 ALTER TABLE student_fees
                 ADD COLUMN IF NOT EXISTS payment_notes VARCHAR(500) NOT NULL DEFAULT '';
+                """
+            )
+        )
+
+
+def migrate_fee_payment_submissions(engine: Engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS fee_payment_submissions (
+                    id VARCHAR(36) PRIMARY KEY,
+                    institute_id VARCHAR(36) NOT NULL REFERENCES institutes(id),
+                    section_id VARCHAR(36) NOT NULL REFERENCES sections(id),
+                    student_id VARCHAR(64) NOT NULL,
+                    amount_paise INTEGER NOT NULL,
+                    method VARCHAR(32) NOT NULL DEFAULT 'upi',
+                    reference VARCHAR(200) NOT NULL DEFAULT '',
+                    proof_notes VARCHAR(500) NOT NULL DEFAULT '',
+                    status VARCHAR(16) NOT NULL DEFAULT 'pending',
+                    payment_id VARCHAR(36) REFERENCES payments(id),
+                    submitted_by VARCHAR(64) NOT NULL,
+                    reviewed_by VARCHAR(64),
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    reviewed_at TIMESTAMPTZ
+                );
                 """
             )
         )
