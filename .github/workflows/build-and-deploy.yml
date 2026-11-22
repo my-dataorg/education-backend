@@ -2,6 +2,8 @@ name: Build and deploy education backend
 
 on:
   workflow_dispatch:
+  push:
+    branches: [Srikanth_Changes]
 
 permissions:
   contents: read
@@ -25,7 +27,9 @@ jobs:
         with:
           context: .
           push: true
-          tags: ghcr.io/${{ github.repository }}:deploy-${{ github.sha }}
+          tags: |
+            ghcr.io/${{ github.repository }}:deploy-${{ github.sha }}
+            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
           platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max
