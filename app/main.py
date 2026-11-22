@@ -11,6 +11,7 @@ from app.auth import get_current_user, require_education_subscription
 from app.routers.lab import router as lab_router
 from app.roles import MANAGE_ROLES, STUDENT_ROLE, TIMETABLE_EDIT_ROLES
 from app.config import settings
+from app.observability import install_observability
 from app.db.migrate import (
     migrate_invitations,
     migrate_activities,
@@ -467,12 +468,14 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
 app.include_router(lab_router)
+install_observability(app, service_name=settings.app_name, engine=engine)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins.split(","),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Request-Id", "Retry-After", "X-RateLimit-Limit", "X-RateLimit-Remaining"],
 )
 
 
